@@ -2,7 +2,7 @@
 
 A ROS2 python package to compute different human-aware navigation metrics about the simulations performed with the HuNav Simulator.
 
-**Tested in ROS2 Foxy** 
+**Tested in ROS2 Humble** 
 
 
 ## Dependencies
@@ -11,6 +11,11 @@ A ROS2 python package to compute different human-aware navigation metrics about 
 * hunav_msgs
 * hunav_agent_manager
 
+At the moment of this update (March 2023), there is a [problem](https://docs.ros.org/en/humble/Releases/Release-Humble-Hawksbill.html#known-issues) which is breaking some parts of ament_package and builds with colcon. 
+To solve this problem now, you will need to install setuptools version 58.2.0:
+```sh
+pip install setuptools==58.2.0
+```
 
 ## Description
 
@@ -294,5 +299,3 @@ After compiling, the user can add the new function name to the ```metrics.yaml``
 [9] Moussaid M, Helbing D, Garnier S, Johansson A, Combe M, et al. (2009) "Experimental study of the behavioural mechanisms underlying self-organization in human crowds". Proceedings of the Royal Society B: Biological Sciences 276: 2755–2762.
 
 [10] Moussaïd, Mehdi & Perozo, Niriaska & Garnier, Simon & Helbing, Dirk & Theraulaz, Guy. (2010). "The Walking Behaviour of Pedestrian Social Groups and Its Impact on Crowd Dynamics". PloS one. 5. e10047. 10.1371/journal.pone.0010047.
-
-

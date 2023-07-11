@@ -52,6 +52,7 @@ namespace hunav_rviz2_panel
   {
     
     QVBoxLayout *topic_button = new QVBoxLayout;
+
     QHBoxLayout *layout = new QHBoxLayout;
     open_button = new QPushButton("Open");
     actors = new QLineEdit;
@@ -110,6 +111,12 @@ namespace hunav_rviz2_panel
     // exit_button = new QPushButton("Exit agent creation");
 
     num_goals_set->setValidator(new QIntValidator(0, 100, this));
+
+    // Only removes markers when the "Create agents" button is clicked (If agent_count > 1 means that agents are being created, 
+    // so markers need to stay in place)
+    if(agent_count == 1){
+      removeCurrentMarkers();
+    }
 
     // Only removes markers when the "Create agents" button is clicked (If agent_count > 1 means that agents are being created, 
     // so markers need to stay in place)
@@ -558,6 +565,7 @@ namespace hunav_rviz2_panel
 
       // Clear goals_marker in order to get new goals if necessary
       marker_array = visualization_msgs::msg::MarkerArray();
+
       // Reset initial pose to false in case user does not close the panel after writing the file.
       // If initial pose is not reseted in the next iteration the initial pose could be empty.
       initial_pose_set = false;
@@ -567,6 +575,7 @@ namespace hunav_rviz2_panel
       // Enables first windows button in order to allow agent creation again
       open_button->setEnabled(true);
       actor_button->setEnabled(true);
+
     }
     else{
       iterate_actors++;
@@ -594,7 +603,9 @@ namespace hunav_rviz2_panel
 
     removeCurrentMarkers();
 
+
     // Check if user wants to open file from another directory.
+
     if(!checkbox->isChecked()){
       openFileExplorer(true);
       pkg_shared_tree_dir_ = dir;
@@ -611,8 +622,10 @@ namespace hunav_rviz2_panel
                       pkg_shared_tree_dir_.c_str());
       }
       pkg_shared_tree_dir_ = pkg_shared_tree_dir_ + "/config/agents.yaml";
+
       RCLCPP_INFO(this->get_logger(), "Default directory: %s", pkg_shared_tree_dir_.c_str());
     }
+
     
     auto marker_array = std::make_unique<visualization_msgs::msg::MarkerArray>();
     YAML::Node yaml_file;
@@ -902,7 +915,7 @@ namespace hunav_rviz2_panel
     arrow_marker.color.b = rgb[blue];
     arrow_marker.color.a = 1.0f;
 
-    arrow_marker.lifetime = rclcpp::Duration(0);
+    arrow_marker.lifetime = rclcpp::Duration(0, 0);
     arrow_marker.frame_locked = false;
 
     markers_array_to_remove.push_back(arrow_marker);
@@ -995,6 +1008,7 @@ namespace hunav_rviz2_panel
 
     oldPose = stored_pose;
   }
+
 
   void ActorPanel::resetInitialPose(){
     visualization_msgs::msg::MarkerArray markers;

@@ -652,8 +652,5 @@ metrics = {
     'social_work': social_work,
     'obstacle_force_on_robot': obstacle_force_on_robot,
     'obstacle_force_on_agents': obstacle_force_on_agents,
+
 }
-
-
-
-

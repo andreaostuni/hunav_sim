@@ -12,7 +12,7 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "rviz_common/panel.hpp"
 #include "rviz_common/tool.hpp"
-#include "tf2_geometry_msgs/tf2_geometry_msgs.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include "visualization_msgs/msg/marker_array.hpp"
 #include "nav2_util/geometry_utils.hpp"
 #include "rviz_common/display_context.hpp"
@@ -27,7 +27,6 @@
 #include <rviz_common/message_filter_display.hpp>
 
 #include <tf2/LinearMath/Quaternion.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
 class QLineEdit;
 
@@ -73,9 +72,11 @@ protected Q_SLOTS:
   void removeMarker(visualization_msgs::msg::Marker marker);
   void resetGoal();
   void openFileExplorer(bool file);
+
   void updateGoalsRemainingText();
   void resetInitialPose();
   void exitAgentCreation();
+
 
 public:
 
@@ -142,7 +143,9 @@ public:
   std::vector<visualization_msgs::msg::Marker> markers_array_to_remove;
   std::vector<visualization_msgs::msg::Marker> arrows_markers_array;
   std::string person_skin;
+
   bool finish_arrow = false;
+
 
   // Colors for Markers
   std::vector<double> rgb{255,0};
@@ -164,4 +167,3 @@ public:
 };
 
 }
-

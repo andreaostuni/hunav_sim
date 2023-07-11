@@ -2,7 +2,9 @@
 
 A controller of human navigation behaviors for Robotics based on ROS 2.
 
-**Tested in ROS2 Foxy** 
+**This is a work in progress version**
+
+**Tested in ROS2 Humble**
 
 The simulated people are affected by the obstacles and other people using the [Social Force Model](https://github.com/robotics-upo/lightsfm).
 Besides, a set of human reactions to the presence of robots have been included.
@@ -15,10 +17,10 @@ A pre-print version of the paper submitted to the RA-L Journal is available [her
 ## Dependencies
 
 * You must download and install the Social Force Model library. Follow the instructions here: https://github.com/robotics-upo/lightsfm
-* The ros people_msgs are also required. At the moment of this development, people_msgs were not still available to be installed from the apt ros-foxy package server. You can get the package from here: https://github.com/wg-perception/people/tree/ros2. Please, copy it and put it in your workspace.
+* The ros people_msgs are also required. At the moment of this development, people_msgs were not still available to be installed from the apt ros-humble package server. You can get the package from here: https://github.com/wg-perception/people/tree/ros2. Please, copy it and put it in your workspace.
 * The ROS2 packages *nav2-behavior-tree* and *behaviortree_cpp_v3* are also needed.
   ```sh
-  sudo apt install ros-foxy-nav2-behavior-tree ros-foxy-behaviortree-cpp-v3
+  sudo apt install ros-humble-nav2-behavior-tree ros-humble-behaviortree-cpp-v3
   ```
 
 ## Features
@@ -29,7 +31,7 @@ A pre-print version of the paper submitted to the RA-L Journal is available [her
 
 * A wrapper for Gazebo Simulator (tested in Gazebo 11) is provided here: https://github.com/robotics-upo/hunav_gazebo_wrapper
 
-* The simulator core is programmed under the new ROS2 framework (tested in Foxy distro).
+* The simulator core is programmed under the new ROS2 framework (tested in Humble distro).
 
 * A GUI based on a RViz2 panel is employed to easily configure the human agents. For instructions, please check the [hunav_rviz2_panel](https://github.com/robotics-upo/hunav_sim/tree/master/hunav_rviz2_panel) 
 
