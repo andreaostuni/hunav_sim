@@ -372,10 +372,7 @@ def group_space_intrusions(
         min_dist = np.inf
         for id in group_ids:
             group_center = get_group_center(agents[i].agents, id, d)
-            dist = (
-                euclidean_distance(robot[i].position, group_center.position)
-                - robot[i].radius
-            )
+            dist = euclidean_distance(robot[i].position, group_center) - robot[i].radius
             min_dist = max(min(min_dist, dist), 0.0)  # Ensure non-negative distance
         indicator = indicator_function_space(min_dist, k)
         if indicator:
