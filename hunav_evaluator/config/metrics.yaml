@@ -4,7 +4,7 @@ hunav_evaluator_node:
     # Specify the frecuency of data capture (Hz).
     # value 0.0 indicates that data is captured as the same 
     # freq than data is published.
-    frequency: 1.0
+    frequency: 0.0
 
     # A .txt file will be created with this name (indicate the full path).
     # If the file already exists, the file will be open
@@ -26,11 +26,12 @@ hunav_evaluator_node:
       intimate_space_intrusions: true
       personal_space_intrusions: true
       social_space_intrusions: true
+      public_space_intrusions: true
       group_intimate_space_intrusions: true
       group_personal_space_intrusions: true
       group_social_space_intrusions: true
-      
-      
+      group_public_space_intrusions: true
+
       # N. Tsoi et al., "SEAN 2.0: Formalizing and Generating Social Situations
       # for Robot Navigation," in IEEE Robotics and Automation Letters, vol. 7,
       # no. 4, pp. 11047-11054, Oct. 2022, doi: 10.1109/LRA.2022.3196783.

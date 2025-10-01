@@ -331,6 +331,16 @@ def social_space_intrusions(
     return [percentage, slist]
 
 
+def public_space_intrusions(
+    agents: List[Agents], robot: List[Agent]
+) -> Tuple[float, List[int]]:
+    percentage, slist = space_intrusions(agents, robot, SpaceType.PUBLIC)
+    rclpy.logging.get_logger("hunav_evaluator").debug(
+        f"Public_space_intrusions: {percentage:.2f} % of the total time"
+    )
+    return [percentage, slist]
+
+
 def detect_groups(agents: List[Agents]) -> List[int]:
     """
     Detects unique group IDs from the agents and returns a list of those IDs.
@@ -436,6 +446,24 @@ def group_social_space_intrusions(
     r = group_space_intrusions(agents, robot, SpaceType.SOCIAL)
     rclpy.logging.get_logger("hunav_evaluator").debug(
         f"Group_social_space_intrusions: {r[0]:.2f} % of the total time"
+    )
+    return r
+
+
+def group_public_space_intrusions(
+    agents: List[Agents], robot: List[Agent]
+) -> List[float]:
+    """Computes the percentage of time the robot intrudes into the public space of groups of agents.
+    Args:
+        agents (List[Agents]): List of Agents messages containing the agents' states.
+        robot (List[Agent]): List of Agent messages representing the robot's state.
+    Returns:
+        List[float]: A list containing the percentage of public space intrusions
+        and a list indicating which robots had intrusions (1 for intrusion, 0 for no intrusion).
+    """
+    r = group_space_intrusions(agents, robot, SpaceType.PUBLIC)
+    rclpy.logging.get_logger("hunav_evaluator").debug(
+        f"Group_public_space_intrusions: {r[0]:.2f} % of the total time"
     )
     return r
 
