@@ -60,7 +60,7 @@ BTnode::BTnode() : Node("hunav_agent_manager")
   }
   // if (pub_agent_states_) {
   human_state_publisher_ = this->create_publisher<hunav_msgs::msg::Agents>("human_states", 1);
-  robot_state_publisher_ = this->create_publisher<hunav_msgs::msg::Agent>("robot_states", 1);
+  robot_state_publisher_ = this->create_publisher<hunav_msgs::msg::Agents>("robot_states", 1);
   //}
   if (pub_people_)
   {
@@ -278,7 +278,7 @@ BT::NodeStatus BTnode::tree_tick(int id, double dt)
 void BTnode::computeAgentsService(const std::shared_ptr<hunav_msgs::srv::ComputeAgents::Request> request,
                                   std::shared_ptr<hunav_msgs::srv::ComputeAgents::Response> response)
 {
-  auto ro = std::make_shared<hunav_msgs::msg::Agent>(request->robot);
+  auto ro = std::make_shared<hunav_msgs::msg::Agents>(request->robots);
   auto ag = std::make_shared<hunav_msgs::msg::Agents>(request->current_agents);
 
   // Update the internal agent states with the
@@ -288,8 +288,7 @@ void BTnode::computeAgentsService(const std::shared_ptr<hunav_msgs::srv::Compute
   if (!initialized_)
   {
     RCLCPP_INFO(this->get_logger(), "First service call received!");
-    RCLCPP_INFO(this->get_logger(), "robot pose x:%.2f, y:%.2f, th:%.2f", ro->position.position.x,
-                ro->position.position.y, ro->yaw);
+    RCLCPP_INFO(this->get_logger(), "Robots received: %li", ro->agents.size());
     RCLCPP_INFO(this->get_logger(), "Agents received: %li", ag->agents.size());
 
     initializeBehaviorTrees(request->current_agents);
@@ -326,7 +325,7 @@ void BTnode::computeAgentsService(const std::shared_ptr<hunav_msgs::srv::Compute
 void BTnode::resetAgentsService(const std::shared_ptr<hunav_msgs::srv::ResetAgents::Request> request,
                                 std::shared_ptr<hunav_msgs::srv::ResetAgents::Response> response)
 {
-  auto ro = std::make_shared<hunav_msgs::msg::Agent>(request->robot);
+  auto ro = std::make_shared<hunav_msgs::msg::Agents>(request->robots);
   auto ag = std::make_shared<hunav_msgs::msg::Agents>(request->current_agents);
 
   // Update the internal agent states with the
@@ -338,7 +337,7 @@ void BTnode::resetAgentsService(const std::shared_ptr<hunav_msgs::srv::ResetAgen
 void BTnode::moveAgentService(const std::shared_ptr<hunav_msgs::srv::MoveAgent::Request> request,
                               std::shared_ptr<hunav_msgs::srv::MoveAgent::Response> response)
 {
-  auto ro = std::make_shared<hunav_msgs::msg::Agent>(request->robot);
+  auto ro = std::make_shared<hunav_msgs::msg::Agents>(request->robots);
   auto ag = std::make_shared<hunav_msgs::msg::Agents>(request->current_agents);
 
   // Update the internal agent states with the
@@ -350,8 +349,7 @@ void BTnode::moveAgentService(const std::shared_ptr<hunav_msgs::srv::MoveAgent::
   if (!initialized_)
   {
     RCLCPP_INFO(this->get_logger(), "First service call received!");
-    RCLCPP_INFO(this->get_logger(), "robot pose x:%.2f, y:%.2f, th:%.2f", ro->position.position.x,
-                ro->position.position.y, ro->yaw);
+    RCLCPP_INFO(this->get_logger(), "Robots received: %li", ro->agents.size());
     RCLCPP_INFO(this->get_logger(), "Agents received: %li", ag->agents.size());
 
     initializeBehaviorTrees(request->current_agents);
@@ -420,21 +418,24 @@ void BTnode::computeAgentService(const std::shared_ptr<hunav_msgs::srv::ComputeA
 //   btfunc_.updateAgentRobot(ro);
 // }
 
-void BTnode::publish_agents_tf(rclcpp::Time t, const hunav_msgs::msg::Agent::SharedPtr robot,
+void BTnode::publish_agents_tf(rclcpp::Time t, const hunav_msgs::msg::Agents::SharedPtr robots,
                                const hunav_msgs::msg::Agents::SharedPtr msg)
 {
   // rclcpp::Time now = this->get_clock()->now();
-  // publish robot TF
-  geometry_msgs::msg::TransformStamped tr;
-  tr.header.stamp = t;
-  tr.header.frame_id = msg->header.frame_id;
-  tr.child_frame_id = robot->name.c_str();
-  tr.transform.translation.x = robot->position.position.x;
-  tr.transform.translation.y = robot->position.position.y;
-  tr.transform.translation.z = robot->position.position.z;
-  tr.transform.rotation = robot->position.orientation;
-  // Send the transformation
-  tf_broadcaster_->sendTransform(tr);
+  // publish one TF per robot
+  for (const auto& robot : robots->agents)
+  {
+    geometry_msgs::msg::TransformStamped tr;
+    tr.header.stamp = t;
+    tr.header.frame_id = msg->header.frame_id;
+    tr.child_frame_id = robot.name.c_str();
+    tr.transform.translation.x = robot.position.position.x;
+    tr.transform.translation.y = robot.position.position.y;
+    tr.transform.translation.z = robot.position.position.z;
+    tr.transform.rotation = robot.position.orientation;
+    // Send the transformation
+    tf_broadcaster_->sendTransform(tr);
+  }
 
   for (const auto& a : msg->agents)
   {
@@ -456,8 +457,9 @@ void BTnode::publish_agent_states(rclcpp::Time t, const hunav_msgs::msg::Agents:
   human_state_publisher_->publish(*msg);
 }
 
-void BTnode::publish_robot_state(rclcpp::Time t, const hunav_msgs::msg::Agent::SharedPtr msg)
+void BTnode::publish_robot_state(rclcpp::Time t, const hunav_msgs::msg::Agents::SharedPtr msg)
 {
+  // All robots on one Agents topic (one entry per robot).
   robot_state_publisher_->publish(*msg);
 }
 

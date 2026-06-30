@@ -44,9 +44,9 @@ public:
 
   void init();
 
-  void updateAllAgents(const hunav_msgs::msg::Agent::SharedPtr robot,
+  void updateAllAgents(const hunav_msgs::msg::Agents::SharedPtr robots,
                        const hunav_msgs::msg::Agents::SharedPtr msg) {
-    agent_manager_.updateAllAgents(robot, msg);
+    agent_manager_.updateAllAgents(robots, msg);
   }
 
   void updateAgentsAndRobot(const hunav_msgs::msg::Agents::SharedPtr msg) {

@@ -1,6 +1,6 @@
-# agents and robot
-hunav_msgs/Agents current_agents 
-hunav_msgs/Agent robot
+# agents and robots
+hunav_msgs/Agents current_agents
+hunav_msgs/Agents robots
 int32 agent_id
 ---
 hunav_msgs/Agent updated_agent

@@ -1,5 +1,10 @@
 # agents and robot
 geometry_msgs/PoseStamped robot_goal
+# Optional per-robot goals (parallel arrays, matched by robot name). When
+# robot_goal_names is non-empty, each robot uses its own goal; robots not listed
+# fall back to robot_goal. Empty arrays = single-robot behaviour (robot_goal).
+string[] robot_goal_names
+geometry_msgs/PoseStamped[] robot_goals
 string experiment_tag "exp_1"
 int32 run_id 0
 ---

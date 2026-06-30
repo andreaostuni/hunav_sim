@@ -128,7 +128,7 @@ protected:
    * @param msg agent states msg
    */
   void publish_agents_tf(rclcpp::Time t,
-                         const hunav_msgs::msg::Agent::SharedPtr robot,
+                         const hunav_msgs::msg::Agents::SharedPtr robots,
                          const hunav_msgs::msg::Agents::SharedPtr msg);
 
   /**
@@ -147,7 +147,7 @@ protected:
    * @param msg agent msg representing the robot state
    */
   void publish_robot_state(rclcpp::Time t,
-                           const hunav_msgs::msg::Agent::SharedPtr msg);
+                           const hunav_msgs::msg::Agents::SharedPtr msg);
 
   /**
    * @brief Publish the agents in the standard people msg
@@ -197,7 +197,7 @@ protected:
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
       forces_publisher_;
   rclcpp::Publisher<hunav_msgs::msg::Agents>::SharedPtr human_state_publisher_;
-  rclcpp::Publisher<hunav_msgs::msg::Agent>::SharedPtr robot_state_publisher_;
+  rclcpp::Publisher<hunav_msgs::msg::Agents>::SharedPtr robot_state_publisher_;
   rclcpp::Publisher<people_msgs::msg::People>::SharedPtr people_publisher_;
 };
 

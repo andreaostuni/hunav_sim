@@ -34,34 +34,51 @@ void AgentManager::init()
 
 float AgentManager::robotSquaredDistance(int id)
 {
-  // std::lock_guard<std::mutex> guard(mutex_);
-  // mutex_.lock();
+  // squared distance to the closest robot (or a large value if there are none)
+  float xa = agents_[id].sfmAgent.position.getX();
+  float ya = agents_[id].sfmAgent.position.getY();
+  float min_sq = std::numeric_limits<float>::max();
+  for (const auto& kv : robots_)
+  {
+    float xr = kv.second.sfmAgent.position.getX();
+    float yr = kv.second.sfmAgent.position.getY();
+    float d = (xr - xa) * (xr - xa) + (yr - ya) * (yr - ya);
+    if (d < min_sq)
+      min_sq = d;
+  }
+  return min_sq;
+}
 
-  // hunav_msgs/msg/Agents
-  float xa = agents_[id].sfmAgent.position.getX();  // position.position.x;
-  float ya = agents_[id].sfmAgent.position.getY();  // position.y;
-  float xr = robot_.sfmAgent.position.getX();       // position.x;
-  float yr = robot_.sfmAgent.position.getY();       // position.y;
-
-  //   sfm agents
-  //   float xa = agents_[request->agent_id].position.getX();
-  //   float ya = agents_[request->agent_id].position.getY();
-  //   float xr = robot_.position.getX();
-  //   float yr = robot_.position.getY();
-
-  // mutex_.unlock();
-  // double d = (xr - xa) * (xr - xa) + (yr - ya) * (yr - ya);
-  // std::cout << "AgentManager.robotSquaredDistance:" << sqrt(d) << std::endl;
-  return (xr - xa) * (xr - xa) + (yr - ya) * (yr - ya);
+const agent* AgentManager::nearestRobot(int id)
+{
+  float xa = agents_[id].sfmAgent.position.getX();
+  float ya = agents_[id].sfmAgent.position.getY();
+  const agent* nearest = nullptr;
+  float min_sq = std::numeric_limits<float>::max();
+  for (const auto& kv : robots_)
+  {
+    float xr = kv.second.sfmAgent.position.getX();
+    float yr = kv.second.sfmAgent.position.getY();
+    float d = (xr - xa) * (xr - xa) + (yr - ya) * (yr - ya);
+    if (d < min_sq)
+    {
+      min_sq = d;
+      nearest = &kv.second;
+    }
+  }
+  return nearest;
 }
 
 bool AgentManager::lineOfSight(int id)
 {
   // mutex_.lock();
+  const agent* r = nearestRobot(id);
+  if (!r)
+    return false;
   float ax = agents_[id].sfmAgent.position.getX();
   float ay = agents_[id].sfmAgent.position.getY();
-  float rx = robot_.sfmAgent.position.getX();
-  float ry = robot_.sfmAgent.position.getY();
+  float rx = r->sfmAgent.position.getX();
+  float ry = r->sfmAgent.position.getY();
   double yaw = agents_[id].sfmAgent.yaw.toRadian();
   // tf2::Quaternion q(
   //     agents_[id].position.orientation.x, agents_[id].position.orientation.y,
@@ -118,9 +135,12 @@ bool AgentManager::isRobotVisible(int id, double dist)
 void AgentManager::lookAtTheRobot(int id)
 {
   std::lock_guard<std::mutex> guard(mutex_);
-  // Robot position
-  float rx = robot_.sfmAgent.position.getX();
-  float ry = robot_.sfmAgent.position.getY();
+  // Robot position (closest robot)
+  const agent* r = nearestRobot(id);
+  if (!r)
+    return;
+  float rx = r->sfmAgent.position.getX();
+  float ry = r->sfmAgent.position.getY();
   // Agent position
   float ax = agents_[id].sfmAgent.position.getX();
   float ay = agents_[id].sfmAgent.position.getY();
@@ -156,9 +176,12 @@ void AgentManager::approximateRobot(int id, double dt, double closest_dist, doub
 
   agents_[id].behavior.state = 1;
 
-  // Robot position
-  float rx = robot_.sfmAgent.position.getX();
-  float ry = robot_.sfmAgent.position.getY();
+  // Robot position (closest robot)
+  const agent* r = nearestRobot(id);
+  if (!r)
+    return;
+  float rx = r->sfmAgent.position.getX();
+  float ry = r->sfmAgent.position.getY();
   float dist = sqrt(robotSquaredDistance(id));
 
   // if the agent is close to the robot,
@@ -184,7 +207,7 @@ void AgentManager::approximateRobot(int id, double dt, double closest_dist, doub
     // Change the agent goal
     sfm::Goal g;
     g.center.set(rx, ry);
-    g.radius = robot_.sfmAgent.radius;
+    g.radius = r->sfmAgent.radius;
     agents_[id].sfmAgent.goals.push_front(g);
 
     // change agent vel according to the proximity of the robot
@@ -214,11 +237,14 @@ void AgentManager::blockRobot(int id, double dt, double front_dist)
 
   agents_[id].behavior.state = 1;
 
-  // Robot position
-  float rx = robot_.sfmAgent.position.getX();
-  float ry = robot_.sfmAgent.position.getY();
+  // Robot position (closest robot)
+  const agent* r = nearestRobot(id);
+  if (!r)
+    return;
+  float rx = r->sfmAgent.position.getX();
+  float ry = r->sfmAgent.position.getY();
 
-  float h = robot_.sfmAgent.yaw.toRadian();
+  float h = r->sfmAgent.yaw.toRadian();
 
   // Store the initial set o goals
   std::list<sfm::Goal> gls = agents_[id].sfmAgent.goals;
@@ -282,8 +308,15 @@ void AgentManager::avoidRobot(int id, double dt, double scary_factor_force, doub
   agents_[id].sfmAgent.desiredVelocity = max_vel;
   computeForces(id);
 
-  // We add an extra repulsive force from the robot
-  utils::Vector2d minDiff = agents_[id].sfmAgent.position - robot_.sfmAgent.position;
+  // We add an extra repulsive force from the closest robot
+  const agent* r = nearestRobot(id);
+  if (!r)
+  {
+    sfm::SFM.updatePosition(agents_[id].sfmAgent, dt);
+    agents_[id].sfmAgent.desiredVelocity = init_vel;
+    return;
+  }
+  utils::Vector2d minDiff = agents_[id].sfmAgent.position - r->sfmAgent.position;
   double distance = minDiff.norm() - agents_[id].sfmAgent.radius;
 
   utils::Vector2d Scaryforce =
@@ -386,28 +419,33 @@ void AgentManager::initializeAgents(const hunav_msgs::msg::Agents::SharedPtr msg
   printf("SFM Agents initialized\n");
 }
 
-void AgentManager::initializeRobot(const hunav_msgs::msg::Agent::SharedPtr msg)
+void AgentManager::initializeRobot(const hunav_msgs::msg::Agents::SharedPtr msg)
 {
-  robot_.name = msg->name;
-  robot_.type = msg->type;
-  // robot_.behavior = msg->behavior;
-  robot_.sfmAgent.id = msg->id;
-  robot_.sfmAgent.groupId = msg->group_id;
-  robot_.sfmAgent.desiredVelocity = msg->desired_velocity;
-  robot_.sfmAgent.radius = msg->radius;
-  robot_.sfmAgent.cyclicGoals = msg->cyclic_goals;
-  robot_.sfmAgent.position.set(msg->position.position.x, msg->position.position.y);
-  robot_.sfmAgent.yaw.setRadian(msg->yaw);
-  robot_.sfmAgent.velocity.set(msg->velocity.linear.x, msg->velocity.linear.y);
-  robot_.sfmAgent.linearVelocity =
-      sqrt(msg->velocity.linear.x * msg->velocity.linear.x + msg->velocity.linear.y * msg->velocity.linear.y);
-  robot_.sfmAgent.angularVelocity = msg->velocity.angular.z;
+  robots_.clear();
+  for (const auto& rob : msg->agents)
+  {
+    agent r;
+    r.name = rob.name;
+    r.type = rob.type;
+    r.sfmAgent.id = rob.id;
+    r.sfmAgent.groupId = rob.group_id;
+    r.sfmAgent.desiredVelocity = rob.desired_velocity;
+    r.sfmAgent.radius = rob.radius;
+    r.sfmAgent.cyclicGoals = rob.cyclic_goals;
+    r.sfmAgent.position.set(rob.position.position.x, rob.position.position.y);
+    r.sfmAgent.yaw.setRadian(rob.yaw);
+    r.sfmAgent.velocity.set(rob.velocity.linear.x, rob.velocity.linear.y);
+    r.sfmAgent.linearVelocity =
+        sqrt(rob.velocity.linear.x * rob.velocity.linear.x + rob.velocity.linear.y * rob.velocity.linear.y);
+    r.sfmAgent.angularVelocity = rob.velocity.angular.z;
+    robots_[r.sfmAgent.id] = r;
 
-  printf("\trobot %i, x:%.2f, y:%.2f\n", robot_.sfmAgent.id, robot_.sfmAgent.position.getX(),
-         robot_.sfmAgent.position.getY());
+    printf("\trobot %i (%s), x:%.2f, y:%.2f\n", r.sfmAgent.id, r.name.c_str(), r.sfmAgent.position.getX(),
+           r.sfmAgent.position.getY());
+  }
 
   robot_initialized_ = true;
-  printf("SFM Robot initialized\n");
+  printf("SFM Robots initialized (%lu)\n", robots_.size());
 }
 
 bool AgentManager::updateAgents(const hunav_msgs::msg::Agents::SharedPtr msg)
@@ -482,21 +520,29 @@ bool AgentManager::updateAgents(const hunav_msgs::msg::Agents::SharedPtr msg)
   // }
 }
 
-void AgentManager::updateAgentRobot(const hunav_msgs::msg::Agent::SharedPtr msg)
+void AgentManager::updateAgentRobot(const hunav_msgs::msg::Agents::SharedPtr msg)
 {
-  // Update robot
-  robot_.sfmAgent.position.set(msg->position.position.x, msg->position.position.y);
-  // tf2::Quaternion q(
-  //     robot_.position.orientation.x, robot_.position.orientation.y,
-  //     robot_.position.orientation.z, robot_.position.orientation.w);
-  // tf2::Matrix3x3 m(q);
-  // double roll, pitch, yaw;
-  // m.getRPY(roll, pitch, yaw);
-  robot_.sfmAgent.yaw.setRadian(msg->yaw);
-  robot_.sfmAgent.velocity.set(msg->velocity.linear.x, msg->velocity.linear.y);
-  robot_.sfmAgent.linearVelocity =
-      sqrt(msg->velocity.linear.x * msg->velocity.linear.x + msg->velocity.linear.y * msg->velocity.linear.y);
-  robot_.sfmAgent.angularVelocity = msg->velocity.angular.z;
+  // Update every robot (a robot that was not initialized is added on the fly)
+  for (const auto& rob : msg->agents)
+  {
+    auto it = robots_.find(rob.id);
+    if (it == robots_.end())
+    {
+      agent r;
+      r.name = rob.name;
+      r.type = rob.type;
+      r.sfmAgent.id = rob.id;
+      r.sfmAgent.radius = rob.radius;
+      it = robots_.emplace(rob.id, r).first;
+    }
+    agent& robot = it->second;
+    robot.sfmAgent.position.set(rob.position.position.x, rob.position.position.y);
+    robot.sfmAgent.yaw.setRadian(rob.yaw);
+    robot.sfmAgent.velocity.set(rob.velocity.linear.x, rob.velocity.linear.y);
+    robot.sfmAgent.linearVelocity =
+        sqrt(rob.velocity.linear.x * rob.velocity.linear.x + rob.velocity.linear.y * rob.velocity.linear.y);
+    robot.sfmAgent.angularVelocity = rob.velocity.angular.z;
+  }
 }
 
 // void AgentManager::robotCallback(
@@ -597,15 +643,19 @@ void AgentManager::computeForces(int id)
     switch (agents_[id].behavior.type)
     {
       case hunav_msgs::msg::AgentBehavior::BEH_REGULAR:
-        // We add the robot as another human agent.
-        otherAgents.push_back(robot_.sfmAgent);
+        // We add every robot as another human agent.
+        for (const auto& kv : robots_)
+          otherAgents.push_back(kv.second.sfmAgent);
         sfm::SFM.computeForces(agents_[id].sfmAgent, otherAgents);
         break;
       case hunav_msgs::msg::AgentBehavior::BEH_IMPASSIVE:
-        // the human treats the robot like an obstacle.
-        // We add the robot to the obstacles of this agent.
-        ob.set(robot_.sfmAgent.position.getX(), robot_.sfmAgent.position.getY());
-        agents_[id].sfmAgent.obstacles1.push_back(ob);
+        // the human treats the robots like obstacles.
+        // We add every robot to the obstacles of this agent.
+        for (const auto& kv : robots_)
+        {
+          ob.set(kv.second.sfmAgent.position.getX(), kv.second.sfmAgent.position.getY());
+          agents_[id].sfmAgent.obstacles1.push_back(ob);
+        }
         sfm::SFM.computeForces(agents_[id].sfmAgent, otherAgents);
         break;
       default:
@@ -616,7 +666,8 @@ void AgentManager::computeForces(int id)
   }
   else
   {
-    otherAgents.push_back(robot_.sfmAgent);
+    for (const auto& kv : robots_)
+      otherAgents.push_back(kv.second.sfmAgent);
     sfm::SFM.computeForces(agents_[id].sfmAgent, otherAgents);
   }
 
@@ -694,7 +745,7 @@ void AgentManager::computeForces()
   }
 }
 
-void AgentManager::updateAllAgents(const hunav_msgs::msg::Agent::SharedPtr robot_msg,
+void AgentManager::updateAllAgents(const hunav_msgs::msg::Agents::SharedPtr robots_msg,
                                    const hunav_msgs::msg::Agents::SharedPtr agents_msg)
 {
   std::lock_guard<std::mutex> guard(mutex_);
@@ -708,7 +759,7 @@ void AgentManager::updateAllAgents(const hunav_msgs::msg::Agent::SharedPtr robot
 
   if (!robot_initialized_)
   {
-    initializeRobot(robot_msg);
+    initializeRobot(robots_msg);
   }
 
   if (!agents_initialized_)
@@ -728,7 +779,7 @@ void AgentManager::updateAllAgents(const hunav_msgs::msg::Agent::SharedPtr robot
     //   return;
     // }
     // prev_time_ = agents_msg->header.stamp;
-    updateAgentRobot(robot_msg);
+    updateAgentRobot(robots_msg);
     move = updateAgents(agents_msg);
   }
   agents_received_ = true;
@@ -745,17 +796,23 @@ void AgentManager::updateAgentsAndRobot(const hunav_msgs::msg::Agents::SharedPtr
 
   header_ = agents_msg->header;
 
-  // The robot is the last agent of the vector!
-  // or we could look for the type "robot" in the vector
-  hunav_msgs::msg::Agent::SharedPtr rob = std::make_shared<hunav_msgs::msg::Agent>(agents_msg->agents.back());
-
-  // we remove the robot from the agents vector
-  hunav_msgs::msg::Agents ags = *agents_msg;
-  ags.agents.pop_back();
+  // Split the incoming vector into robots (type == ROBOT) and humans.
+  hunav_msgs::msg::Agents robs;
+  robs.header = agents_msg->header;
+  hunav_msgs::msg::Agents ags;
+  ags.header = agents_msg->header;
+  for (const auto& a : agents_msg->agents)
+  {
+    if (a.type == hunav_msgs::msg::Agent::ROBOT)
+      robs.agents.push_back(a);
+    else
+      ags.agents.push_back(a);
+  }
+  auto robs_ptr = std::make_shared<hunav_msgs::msg::Agents>(robs);
 
   if (!robot_initialized_)
   {
-    initializeRobot(rob);
+    initializeRobot(robs_ptr);
   }
   if (!agents_initialized_)
   {
@@ -772,7 +829,7 @@ void AgentManager::updateAgentsAndRobot(const hunav_msgs::msg::Agents::SharedPtr
     //   return;
     // }
     // prev_time_ = agents_msg->header.stamp;
-    updateAgentRobot(rob);
+    updateAgentRobot(robs_ptr);
     move = updateAgents(std::make_shared<hunav_msgs::msg::Agents>(ags));
   }
 

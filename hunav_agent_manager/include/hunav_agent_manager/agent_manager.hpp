@@ -31,6 +31,7 @@
 #include <iostream>
 //#include <memory>
 #include <chrono>
+#include <limits>
 #include <math.h> /* fabs */
 #include <mutex>
 #include <string>
@@ -87,7 +88,7 @@ public:
    *
    * @param msg
    */
-  void updateAllAgents(const hunav_msgs::msg::Agent::SharedPtr robot_msg, const hunav_msgs::msg::Agents::SharedPtr msg);
+  void updateAllAgents(const hunav_msgs::msg::Agents::SharedPtr robots_msg, const hunav_msgs::msg::Agents::SharedPtr msg);
   /**
    * @brief method to update the agents
    *
@@ -99,7 +100,7 @@ public:
    *
    * @param msg
    */
-  void updateAgentRobot(const hunav_msgs::msg::Agent::SharedPtr msg);
+  void updateAgentRobot(const hunav_msgs::msg::Agents::SharedPtr msg);
   /**
    * @brief method to update the robot
    *
@@ -121,7 +122,7 @@ public:
    * @brief initialize the srobot_ based on the agent msg of the robot
    *
    */
-  void initializeRobot(const hunav_msgs::msg::Agent::SharedPtr msg);
+  void initializeRobot(const hunav_msgs::msg::Agents::SharedPtr msg);
 
   /**
    * @brief return the vector of agents in format of sfm lib
@@ -168,6 +169,15 @@ public:
    * @return float
    */
   float robotSquaredDistance(int id);
+  /**
+   * @brief return a pointer to the robot closest to the agent indicated by id,
+   * or nullptr if there are no robots. Used by the behaviors that must react to
+   * "the robot" when more than one is present.
+   *
+   * @param id int value that is the agent id
+   * @return const agent* nearest robot (nullptr if none)
+   */
+  const agent* nearestRobot(int id);
   /**
    * @brief stop the agent translation and changing its orientation to look at
    * the robot
@@ -271,7 +281,8 @@ protected:
   // std::vector<sfm::Agent> sfm_agents_;
   std::unordered_map<int, agent> agents_;
   // hunav_msgs::msg::Agent robot_;
-  agent robot_;
+  // One entry per robot (keyed by robot id). Replaces the old single robot_.
+  std::unordered_map<int, agent> robots_;
   std_msgs::msg::Header header_;
   // sfm::Agent sfm_robot_;
   float max_dist_view_;

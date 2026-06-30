@@ -129,7 +129,7 @@ int main(int argc, char *argv[]) {
   hunav_msgs::msg::Agents agents = fillInitialAgents();
   agents.header.frame_id = "odom";
   agents.header.stamp = node->get_clock()->now();
-  request->robot = robot;
+  request->robots.agents.push_back(robot);
   request->current_agents = agents;
 
   // rclcpp::TimerBase::SharedPtr timer = node->create_wall_timer(
