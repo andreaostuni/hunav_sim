@@ -34,10 +34,15 @@
 #include <limits>
 #include <math.h> /* fabs */
 #include <mutex>
+#include <random>
 #include <string>
+#include <vector>
 
 // Social Force Model
 #include <lightsfm/sfm.hpp>
+
+// Pluggable human motion models (SFM / CV / ORCA)
+#include "hunav_agent_manager/motion_models.hpp"
 
 namespace hunav
 {
@@ -62,6 +67,9 @@ struct agent
   // int behavior_state;
   agentBehavior behavior;
   sfm::Agent sfmAgent;
+  // Motion model driving this agent on the regular navigation path.
+  MotionModel motionModel = MotionModel::Sfm;
+  std::shared_ptr<AgentMotionModel> motion_model;
 };
 
 class AgentManager
@@ -89,6 +97,8 @@ public:
    * @param msg
    */
   void updateAllAgents(const hunav_msgs::msg::Agents::SharedPtr robots_msg, const hunav_msgs::msg::Agents::SharedPtr msg);
+  void resetAllAgents(const hunav_msgs::msg::Agents::SharedPtr robots_msg,
+                      const hunav_msgs::msg::Agents::SharedPtr msg);
   /**
    * @brief method to update the agents
    *
@@ -234,6 +244,67 @@ public:
   bool goalReached(int id);
   bool updateGoal(int id);
 
+  /**
+   * @brief set the motion model used by all humans that do not have a
+   * per-agent override. Must be called before the agents are initialized.
+   * @param m motion model
+   */
+  void setDefaultMotionModel(MotionModel m);
+  /**
+   * @brief set the motion model for a single human (by name), overriding the
+   * default. Patches the agent in place if it is already initialized, and is
+   * remembered so it survives a re-initialization (reset).
+   * @param name agent name
+   * @param m motion model
+   */
+  void setAgentMotionModel(const std::string& name, MotionModel m);
+  /**
+   * @brief set the ORCA tuning parameters. Applied to ORCA agents created
+   * afterwards; existing ORCA agents are re-created so the change takes effect.
+   * @param p ORCA parameters
+   */
+  void setOrcaParams(const OrcaParams& p);
+
+  /**
+   * @brief set the cross-reset motion-model assignment strategy (fixed, random
+   * or sweep). See MotionModelStrategy. Must be set before initialization.
+   * @param s strategy
+   */
+  void setMotionModelStrategy(MotionModelStrategy s);
+  /**
+   * @brief set the list of motion models the `random` strategy draws from. An
+   * empty list is ignored (the default {sfm, cv, orca} is kept).
+   * @param choices motion models to sample uniformly
+   */
+  void setRandomMotionModelChoices(const std::vector<MotionModel>& choices);
+  /**
+   * @brief set the two motion models the `sweep` strategy migrates between:
+   * experiment 0 uses `from` for everyone; each reset switches one more agent
+   * to `to`.
+   * @param from starting motion model
+   * @param to target motion model
+   */
+  void setSweepMotionModels(MotionModel from, MotionModel to);
+  /**
+   * @brief enable cyclic `sweep`: once every agent has migrated to `to`, the
+   * next reset wraps back to all-`from` and the migration repeats. When
+   * disabled (default) the sweep saturates at all-`to` and stays there.
+   * @param cycle true to loop the sweep, false to saturate
+   */
+  void setSweepCycle(bool cycle);
+  /**
+   * @brief seed the random generator used by the `random` strategy (and by the
+   * random sweep order) so experiment sequences are reproducible.
+   * @param seed seed value
+   */
+  void setMotionModelSeed(unsigned int seed);
+  /**
+   * @brief advance to the next experiment: bump the episode index and re-assign
+   * every agent's motion model according to the active strategy. Call once per
+   * reset (no-op for the `fixed` strategy). The agents must be initialized.
+   */
+  void resetEpisode();
+
   int step_count;
   int step_count2;
   bool move;
@@ -269,6 +340,45 @@ public:
   }
 
 protected:
+  /**
+   * @brief build the neighbor set for one agent: every other human plus every
+   * robot, as sfm::Agent. Same membership computeForces uses. Caller must hold
+   * mutex_ (used from updatePosition, which already locks).
+   * @param id agent id to exclude as self
+   */
+  std::vector<sfm::Agent> getNeighbors(int id);
+
+  /**
+   * @brief (re)assign each agent's motion model according to mm_strategy_ and
+   * the current episode_index_. No-op for the `fixed` strategy (the per-agent
+   * resolution in initializeAgents already handles that case). Caller must hold
+   * mutex_ (called from initializeAgents and resetEpisode).
+   */
+  void assignMotionModels();
+
+  // Default model for humans without a per-agent override, and the set of
+  // per-agent overrides (kept so resets re-apply them).
+  MotionModel default_motion_model_ = MotionModel::Sfm;
+  std::unordered_map<std::string, MotionModel> motion_model_overrides_;
+  OrcaParams orca_params_;
+
+  // Cross-reset motion-model assignment strategy (see MotionModelStrategy).
+  MotionModelStrategy mm_strategy_ = MotionModelStrategy::Fixed;
+  // Pool the `random` strategy samples from.
+  std::vector<MotionModel> mm_random_choices_{ MotionModel::Sfm, MotionModel::Cv, MotionModel::Orca };
+  // Endpoints of the `sweep` strategy migration.
+  MotionModel mm_sweep_from_ = MotionModel::Sfm;
+  MotionModel mm_sweep_to_ = MotionModel::Cv;
+  // When true, the `sweep` loops back to all-`from` after reaching all-`to`
+  // instead of saturating there.
+  bool mm_sweep_cycle_ = false;
+  // Experiment index: 0 for the first run, +1 on every reset. Drives the
+  // deterministic sweep progression and re-draws for the random strategy.
+  int episode_index_ = 0;
+  // Random generator for the random strategy (seeded non-deterministically by
+  // default; setMotionModelSeed makes runs reproducible).
+  std::mt19937 mm_rng_{ std::random_device{}() };
+
   // std::vector<bool> agent_status_;
   // std::unordered_map<int, bool> agents_computed_;
   // int status_;

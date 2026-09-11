@@ -1,5 +1,7 @@
 #include "hunav_agent_manager/agent_manager.hpp"
 
+#include <algorithm>
+
 namespace hunav
 {
 
@@ -410,11 +412,19 @@ void AgentManager::initializeAgents(const hunav_msgs::msg::Agents::SharedPtr msg
     ag.sfmAgent.params.forceFactorDesired = a.behavior.goal_force_factor;
     ag.sfmAgent.params.forceFactorObstacle = a.behavior.obstacle_force_factor;
 
+    // Resolve the motion model: per-agent override if set, else the default.
+    auto mm_it = motion_model_overrides_.find(ag.name);
+    ag.motionModel = (mm_it != motion_model_overrides_.end()) ? mm_it->second : default_motion_model_;
+    ag.motion_model = makeMotionModel(ag.motionModel, orca_params_);
+
     agents_[ag.sfmAgent.id] = ag;
     printf("\tagent %s, x:%.2f, y:%.2f, th:%.2f\n", agents_[ag.sfmAgent.id].name.c_str(),
            agents_[ag.sfmAgent.id].sfmAgent.position.getX(), agents_[ag.sfmAgent.id].sfmAgent.position.getY(),
            agents_[ag.sfmAgent.id].sfmAgent.yaw.toRadian());
   }
+  // Override the per-agent resolution above when a cross-reset strategy
+  // (random/sweep) is active. episode_index_ is 0 for this first experiment.
+  assignMotionModels();
   agents_initialized_ = true;
   printf("SFM Agents initialized\n");
 }
@@ -787,6 +797,29 @@ void AgentManager::updateAllAgents(const hunav_msgs::msg::Agents::SharedPtr robo
   computeForces();
 }
 
+void AgentManager::resetAllAgents(const hunav_msgs::msg::Agents::SharedPtr robots_msg,
+                                  const hunav_msgs::msg::Agents::SharedPtr agents_msg)
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+
+  // A reset must restore the complete episode state. updateAgents() intentionally
+  // preserves the live goal queue, which is wrong here once non-cyclic goals
+  // have been consumed.
+  ++episode_index_;
+  header_ = agents_msg->header;
+  agents_.clear();
+  robots_.clear();
+  agents_initialized_ = false;
+  robot_initialized_ = false;
+
+  initializeRobot(robots_msg);
+  initializeAgents(agents_msg);
+  agents_received_ = true;
+  robot_received_ = true;
+  computeForces();
+  printf("[AgentManager] episode reset to initial state (episode %d)\n", episode_index_);
+}
+
 void AgentManager::updateAgentsAndRobot(const hunav_msgs::msg::Agents::SharedPtr agents_msg)
 {
   std::lock_guard<std::mutex> guard(mutex_);
@@ -861,6 +894,149 @@ bool AgentManager::canCompute()
 //   }
 // }
 
+void AgentManager::setDefaultMotionModel(MotionModel m)
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+  default_motion_model_ = m;
+}
+
+void AgentManager::setOrcaParams(const OrcaParams& p)
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+  orca_params_ = p;
+  // Re-create any already-initialized ORCA agents so the new tuning applies.
+  for (auto& kv : agents_)
+  {
+    if (kv.second.motionModel == MotionModel::Orca)
+      kv.second.motion_model = makeMotionModel(MotionModel::Orca, orca_params_);
+  }
+}
+
+void AgentManager::setAgentMotionModel(const std::string& name, MotionModel m)
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+  motion_model_overrides_[name] = m;
+  // Patch any already-initialized agent with this name.
+  for (auto& kv : agents_)
+  {
+    if (kv.second.name == name)
+    {
+      kv.second.motionModel = m;
+      kv.second.motion_model = makeMotionModel(m, orca_params_);
+    }
+  }
+}
+
+void AgentManager::setMotionModelStrategy(MotionModelStrategy s)
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+  mm_strategy_ = s;
+}
+
+void AgentManager::setRandomMotionModelChoices(const std::vector<MotionModel>& choices)
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+  if (!choices.empty())
+    mm_random_choices_ = choices;
+}
+
+void AgentManager::setSweepMotionModels(MotionModel from, MotionModel to)
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+  mm_sweep_from_ = from;
+  mm_sweep_to_ = to;
+}
+
+void AgentManager::setSweepCycle(bool cycle)
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+  mm_sweep_cycle_ = cycle;
+}
+
+void AgentManager::setMotionModelSeed(unsigned int seed)
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+  mm_rng_.seed(seed);
+}
+
+void AgentManager::resetEpisode()
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+  if (!agents_initialized_)
+    return;  // nothing to re-assign yet; the first init handles episode 0.
+  episode_index_++;
+  assignMotionModels();
+  printf("[MM strategy=%s] episode advanced to %d\n", motionModelStrategyToString(mm_strategy_), episode_index_);
+}
+
+void AgentManager::assignMotionModels()
+{
+  // Fixed keeps the default_motion_model_ + per-agent overrides already
+  // resolved in initializeAgents, so nothing to do here.
+  if (mm_strategy_ == MotionModelStrategy::Fixed)
+    return;
+
+  // agents_ is an unordered_map, so its iteration order is unspecified. Both
+  // strategies must walk the agents by ascending id instead: `random` binds its
+  // draws to a stable agent order (same seed -> same agent/model mapping across
+  // runs), and `sweep` migrates agents in a defined order.
+  std::vector<int> ids;
+  ids.reserve(agents_.size());
+  for (const auto& kv : agents_)
+    ids.push_back(kv.first);
+  std::sort(ids.begin(), ids.end());
+
+  if (mm_strategy_ == MotionModelStrategy::Random)
+  {
+    if (mm_random_choices_.empty())
+      return;
+    std::uniform_int_distribution<std::size_t> pick(0, mm_random_choices_.size() - 1);
+    for (int id : ids)
+    {
+      MotionModel m = mm_random_choices_[pick(mm_rng_)];
+      agent& a = agents_[id];
+      a.motionModel = m;
+      a.motion_model = makeMotionModel(m, orca_params_);
+      printf("[MM strategy=random] ep %d: agent %s (id %d) -> %s\n", episode_index_, a.name.c_str(), id,
+             motionModelToString(m));
+    }
+    return;
+  }
+
+  // Sweep: the first `progress` agents have already migrated to `to`, the rest
+  // still use `from`. Once `progress` reaches the agent count, everyone uses
+  // `to`. When mm_sweep_cycle_ is set, the progress wraps modulo N+1 (the +1
+  // keeps a full all-`from` state at 0 and a full all-`to` state at N before
+  // looping back to all-`from`); otherwise it saturates at the agent count.
+  int progress = episode_index_;
+  if (mm_sweep_cycle_ && !ids.empty())
+    progress = episode_index_ % (static_cast<int>(ids.size()) + 1);
+  for (std::size_t i = 0; i < ids.size(); ++i)
+  {
+    MotionModel m = (static_cast<int>(i) < progress) ? mm_sweep_to_ : mm_sweep_from_;
+    agent& a = agents_[ids[i]];
+    a.motionModel = m;
+    a.motion_model = makeMotionModel(m, orca_params_);
+    printf("[MM strategy=sweep] ep %d: agent %s (id %d) -> %s\n", episode_index_, a.name.c_str(), ids[i],
+           motionModelToString(m));
+  }
+}
+
+std::vector<sfm::Agent> AgentManager::getNeighbors(int id)
+{
+  // Caller (updatePosition) already holds mutex_.
+  std::vector<sfm::Agent> neighbors;
+  neighbors.reserve(agents_.size() + robots_.size());
+  for (const auto& kv : agents_)
+  {
+    if (kv.first != id)
+      neighbors.push_back(kv.second.sfmAgent);
+  }
+  for (const auto& kv : robots_)
+    neighbors.push_back(kv.second.sfmAgent);
+  return neighbors;
+}
+
 void AgentManager::updatePosition(int id, double dt)
 {
   std::lock_guard<std::mutex> guard(mutex_);
@@ -902,7 +1078,14 @@ void AgentManager::updatePosition(int id, double dt)
   //        agents_[id].sfmAgent.forces.socialForce.norm(),
   //        agents_[id].sfmAgent.forces.obstacleForce.norm());
 
-  sfm::SFM.updatePosition(agents_[id].sfmAgent, dt);
+  // Route the integration step through the agent's motion model. For SFM this
+  // is a pass-through to sfm::SFM.updatePosition using the forces already
+  // computed by computeForces (identical trajectories); CV/ORCA decide their
+  // own velocity from the neighbor set.
+  if (!agents_[id].motion_model)
+    agents_[id].motion_model = makeMotionModel(agents_[id].motionModel, orca_params_);
+  std::vector<sfm::Agent> neighbors = getNeighbors(id);
+  agents_[id].motion_model->update(agents_[id].sfmAgent, neighbors, dt);
   // step_count2 = 1;
   // double newyaw = atan2(agents_[id].sfmAgent.forces.globalForce.getY(),
   //                       agents_[id].sfmAgent.forces.globalForce.getX());

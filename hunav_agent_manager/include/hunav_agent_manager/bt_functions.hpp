@@ -49,6 +49,11 @@ public:
     agent_manager_.updateAllAgents(robots, msg);
   }
 
+  void resetAllAgents(const hunav_msgs::msg::Agents::SharedPtr robots,
+                      const hunav_msgs::msg::Agents::SharedPtr msg) {
+    agent_manager_.resetAllAgents(robots, msg);
+  }
+
   void updateAgentsAndRobot(const hunav_msgs::msg::Agents::SharedPtr msg) {
     agent_manager_.updateAgentsAndRobot(msg);
   }
@@ -66,6 +71,37 @@ public:
   sfm::Forces getAgentForces(int id) {
     return agent_manager_.getAgentForces(id);
   };
+
+  // Motion model selection (passthrough to the agent manager).
+  void setDefaultMotionModel(MotionModel m) {
+    agent_manager_.setDefaultMotionModel(m);
+  }
+  void setAgentMotionModel(const std::string &name, MotionModel m) {
+    agent_manager_.setAgentMotionModel(name, m);
+  }
+  void setOrcaParams(const OrcaParams &p) {
+    agent_manager_.setOrcaParams(p);
+  }
+
+  // Cross-reset motion-model strategy (passthrough to the agent manager).
+  void setMotionModelStrategy(MotionModelStrategy s) {
+    agent_manager_.setMotionModelStrategy(s);
+  }
+  void setRandomMotionModelChoices(const std::vector<MotionModel> &choices) {
+    agent_manager_.setRandomMotionModelChoices(choices);
+  }
+  void setSweepMotionModels(MotionModel from, MotionModel to) {
+    agent_manager_.setSweepMotionModels(from, to);
+  }
+  void setSweepCycle(bool cycle) {
+    agent_manager_.setSweepCycle(cycle);
+  }
+  void setMotionModelSeed(unsigned int seed) {
+    agent_manager_.setMotionModelSeed(seed);
+  }
+  void resetEpisode() {
+    agent_manager_.resetEpisode();
+  }
 
   // BT Conditions
   BT::NodeStatus robotVisible(BT::TreeNode &self);

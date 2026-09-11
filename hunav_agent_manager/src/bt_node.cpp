@@ -34,6 +34,61 @@ BTnode::BTnode() : Node("hunav_agent_manager")
 
   pub_people_ = this->declare_parameter<bool>("hunav_loader.publish_people", true);
 
+  // Default human motion model for agents without a per-agent override.
+  MotionModel default_mm = motionModelFromString(this->declare_parameter<std::string>("default_motion_model", "sfm"));
+  btfunc_.setDefaultMotionModel(default_mm);
+  RCLCPP_INFO(this->get_logger(), "Default human motion model: %s", motionModelToString(default_mm));
+
+  // ORCA (RVO2) tuning parameters.
+  OrcaParams orca;
+  orca.neighbor_dist = this->declare_parameter<double>("orca.neighbor_dist", orca.neighbor_dist);
+  orca.max_neighbors = this->declare_parameter<int>("orca.max_neighbors", orca.max_neighbors);
+  orca.time_horizon = this->declare_parameter<double>("orca.time_horizon", orca.time_horizon);
+  orca.time_horizon_obst = this->declare_parameter<double>("orca.time_horizon_obst", orca.time_horizon_obst);
+  orca.obstacle_segment = this->declare_parameter<double>("orca.obstacle_segment", orca.obstacle_segment);
+  btfunc_.setOrcaParams(orca);
+  RCLCPP_INFO(this->get_logger(),
+              "ORCA params: neighbor_dist=%.2f, max_neighbors=%d, time_horizon=%.2f, "
+              "time_horizon_obst=%.2f, obstacle_segment=%.2f",
+              orca.neighbor_dist, orca.max_neighbors, orca.time_horizon, orca.time_horizon_obst,
+              orca.obstacle_segment);
+
+  // Cross-reset motion-model assignment strategy (fixed|random|sweep). On every
+  // reset_agents call the episode index advances and models are re-assigned.
+  MotionModelStrategy mm_strategy =
+      motionModelStrategyFromString(this->declare_parameter<std::string>("motion_model_strategy", "fixed"));
+  btfunc_.setMotionModelStrategy(mm_strategy);
+  RCLCPP_INFO(this->get_logger(), "Motion model strategy: %s", motionModelStrategyToString(mm_strategy));
+
+  // `random` strategy: pool of models each agent draws from on every reset.
+  std::vector<std::string> mm_choices_str = this->declare_parameter<std::vector<std::string>>(
+      "motion_model_choices", std::vector<std::string>{ "sfm", "cv", "orca" });
+  std::vector<MotionModel> mm_choices;
+  for (const auto& c : mm_choices_str)
+    mm_choices.push_back(motionModelFromString(c));
+  btfunc_.setRandomMotionModelChoices(mm_choices);
+
+  // `sweep` strategy: migrate agents one-by-one from `from` to `to` across resets.
+  MotionModel sweep_from = motionModelFromString(this->declare_parameter<std::string>("motion_model_sweep.from", "sfm"));
+  MotionModel sweep_to = motionModelFromString(this->declare_parameter<std::string>("motion_model_sweep.to", "cv"));
+  btfunc_.setSweepMotionModels(sweep_from, sweep_to);
+  RCLCPP_INFO(this->get_logger(), "Motion model sweep: %s -> %s", motionModelToString(sweep_from),
+              motionModelToString(sweep_to));
+
+  // When true, the sweep loops back to all-`from` after reaching all-`to`
+  // instead of saturating there.
+  bool sweep_cycle = this->declare_parameter<bool>("motion_model_sweep.cycle", false);
+  btfunc_.setSweepCycle(sweep_cycle);
+  RCLCPP_INFO(this->get_logger(), "Motion model sweep cycle: %s", sweep_cycle ? "true" : "false");
+
+  // Optional seed for the `random` strategy (< 0 -> non-deterministic).
+  int mm_seed = this->declare_parameter<int>("motion_model_seed", -1);
+  if (mm_seed >= 0)
+  {
+    btfunc_.setMotionModelSeed(static_cast<unsigned int>(mm_seed));
+    RCLCPP_INFO(this->get_logger(), "Motion model random seed: %d", mm_seed);
+  }
+
   prev_time_ = this->get_clock()->now();
   // btfunc_.init();
 
@@ -117,6 +172,17 @@ void BTnode::initializeBehaviorTree(const hunav_msgs::msg::Agent& _agent)
 {
   RCLCPP_INFO(this->get_logger(), "Initializing Behavior tree of Agent %s, id: %i, behavior: %i", _agent.name.c_str(),
                 _agent.id, (int)_agent.behavior.type);
+
+  // Per-agent motion model override (empty string -> use the global default).
+  std::string mm_param = _agent.name + ".motion_model";
+  std::string mm = this->has_parameter(mm_param) ? this->get_parameter(mm_param).as_string()
+                                                 : this->declare_parameter<std::string>(mm_param, "");
+  if (!mm.empty())
+  {
+    btfunc_.setAgentMotionModel(_agent.name, motionModelFromString(mm));
+    RCLCPP_INFO(this->get_logger(), "\tagent %s motion model: %s", _agent.name.c_str(),
+                motionModelToString(motionModelFromString(mm)));
+  }
 
   // BT::Tree tree;
   // RCLCPP_INFO(this->get_logger(), "Setting id: %i", agents.agents[i].id);
@@ -328,9 +394,11 @@ void BTnode::resetAgentsService(const std::shared_ptr<hunav_msgs::srv::ResetAgen
   auto ro = std::make_shared<hunav_msgs::msg::Agents>(request->robots);
   auto ag = std::make_shared<hunav_msgs::msg::Agents>(request->current_agents);
 
-  // Update the internal agent states with the
-  // received data from the simulator
-  btfunc_.updateAllAgents(ro, ag);
+  // Recreate the complete agent and behavior-tree state. In particular this
+  // restores non-cyclic goals consumed during the previous episode.
+  btfunc_.resetAllAgents(ro, ag);
+  initializeBehaviorTrees(request->current_agents);
+  prev_time_ = rclcpp::Time(ag->header.stamp);
   response->ok = true;
 }
 

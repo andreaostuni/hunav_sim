@@ -17,14 +17,25 @@ find_package(tf2_ros REQUIRED)
 find_package(nav2_behavior_tree REQUIRED)
 find_package(behaviortree_cpp REQUIRED)
 
+# RVO2 (ORCA motion model). Mirrors the orca_controller FetchContent block.
+# The RVO target exposes its headers transitively via PUBLIC include dirs.
+include(FetchContent)
+fetchcontent_declare(
+  rvo2
+  GIT_REPOSITORY https://github.com/snape/RVO2.git
+  GIT_TAG        af26bedf27a84ffffb59beea996ffe2531ddc789
+)
+fetchcontent_makeavailable(rvo2)
+
 
 include_directories(
   include
   /usr/local/include #to find lightsfm just in case
 )
 
-add_executable(hunav_agent_manager src/agent_manager_node.cpp src/agent_manager.cpp src/time_expired_condition.cpp src/bt_functions.cpp src/bt_node.cpp)
+add_executable(hunav_agent_manager src/agent_manager_node.cpp src/agent_manager.cpp src/motion_models.cpp src/time_expired_condition.cpp src/bt_functions.cpp src/bt_node.cpp)
 ament_target_dependencies(hunav_agent_manager rclcpp hunav_msgs people_msgs geometry_msgs visualization_msgs nav2_behavior_tree tf2 tf2_ros behaviortree_cpp)
+target_link_libraries(hunav_agent_manager RVO)
 
 
 #add_executable(test_agent_manager src/test_agent_manager_node.cpp)

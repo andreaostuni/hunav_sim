@@ -17,6 +17,37 @@ HunavLoader::HunavLoader() : Node("hunav_loader")
 
   std::string map = this->declare_parameter<std::string>("map", std::string("map.yaml"));
 
+  // Global default human motion model (sfm|cv|orca). Per-agent overrides are
+  // read below as <name>.motion_model. Selection is consumed by the agent
+  // manager node; the loader only declares/validates/logs it.
+  std::string default_motion_model = this->declare_parameter<std::string>("default_motion_model", "sfm");
+  RCLCPP_INFO(this->get_logger(), "default_motion_model: %s", default_motion_model.c_str());
+
+  // Cross-reset motion-model assignment strategy (fixed|random|sweep) and its
+  // config. Consumed by the agent manager node; declared/logged here so the
+  // parameters are validated and visible alongside the rest of the config.
+  std::string motion_model_strategy = this->declare_parameter<std::string>("motion_model_strategy", "fixed");
+  RCLCPP_INFO(this->get_logger(), "motion_model_strategy: %s", motion_model_strategy.c_str());
+  std::vector<std::string> motion_model_choices = this->declare_parameter<std::vector<std::string>>(
+      "motion_model_choices", std::vector<std::string>{ "sfm", "cv", "orca" });
+  std::string sweep_from = this->declare_parameter<std::string>("motion_model_sweep.from", "sfm");
+  std::string sweep_to = this->declare_parameter<std::string>("motion_model_sweep.to", "cv");
+  RCLCPP_INFO(this->get_logger(), "motion_model_sweep: %s -> %s", sweep_from.c_str(), sweep_to.c_str());
+  int motion_model_seed = this->declare_parameter<int>("motion_model_seed", -1);
+  RCLCPP_INFO(this->get_logger(), "motion_model_seed: %d", motion_model_seed);
+
+  // ORCA (RVO2) tuning parameters (consumed by the agent manager node).
+  double orca_neighbor_dist = this->declare_parameter<double>("orca.neighbor_dist", 5.0);
+  int orca_max_neighbors = this->declare_parameter<int>("orca.max_neighbors", 10);
+  double orca_time_horizon = this->declare_parameter<double>("orca.time_horizon", 5.0);
+  double orca_time_horizon_obst = this->declare_parameter<double>("orca.time_horizon_obst", 5.0);
+  double orca_obstacle_segment = this->declare_parameter<double>("orca.obstacle_segment", 0.2);
+  RCLCPP_INFO(this->get_logger(),
+              "orca params: neighbor_dist=%.2f, max_neighbors=%d, time_horizon=%.2f, "
+              "time_horizon_obst=%.2f, obstacle_segment=%.2f",
+              orca_neighbor_dist, orca_max_neighbors, orca_time_horizon, orca_time_horizon_obst,
+              orca_obstacle_segment);
+
   this->declare_parameter(std::string("agents"), rclcpp::ParameterType::PARAMETER_STRING_ARRAY);
   rclcpp::Parameter array_agents = this->get_parameter("agents");
   auto agent_names = array_agents.as_string_array();
@@ -39,6 +70,10 @@ HunavLoader::HunavLoader() : Node("hunav_loader")
     RCLCPP_INFO(this->get_logger(), "\tmax_vel: %.2f", max_vel);
     double radius = this->declare_parameter<double>(name + ".radius", 0.35);
     RCLCPP_INFO(this->get_logger(), "\tradius: %.2f", radius);
+
+    // Per-agent motion model override (empty -> use default_motion_model).
+    std::string motion_model = this->declare_parameter<std::string>(name + ".motion_model", "");
+    RCLCPP_INFO(this->get_logger(), "\tmotion_model: %s", motion_model.empty() ? "(default)" : motion_model.c_str());
 
     // Behavior
     int behavior = this->declare_parameter<int>(name + ".behavior.type", 0);
