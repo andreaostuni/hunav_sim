@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import math
 import rclpy
 from hunav_msgs.msg import Agents
@@ -112,16 +113,36 @@ def get_time_stamps(agents: List[Agents], robot: List[Agent]) -> List[float]:
     return time_list
 
 
+def at_goal(r: Agent) -> bool:
+    """Whether the robot's centre is within goal_radius (the goal tolerance) of a goal."""
+    return any(euclidean_distance(r.position, g) < r.goal_radius for g in r.goals)
+
+
+def time_integral(values: List[float], agents: List[Agents]) -> float:
+    """Trapezoidal integral of per-step values over the message time stamps.
+
+    The cumulative metrics integrate over time rather than sum per step, so they
+    do not depend on how often the data was recorded.
+    """
+    t = np.asarray(get_time_stamps(agents, None), dtype=float)
+    v = np.asarray(values, dtype=float)
+    if len(v) < 2:
+        return 0.0
+    return float(np.sum(0.5 * (v[1:] + v[:-1]) * np.diff(t)))
+
+
 def total_time(agents: List[Agents], robot: List[Agent]) -> List[float]:
     """
-    Computes the total time taken to reach the goal by the robot.
+    Computes the time until the robot first reaches its goal (its centre within
+    goal_radius), or the whole recording when it never does.
     Args:
         agents (List[Agents]): List of Agents messages containing the time stamps.
         robot (List[Agent]): List of Agent messages representing the robot's state.
     Returns:
         List[float]: A list containing the total time in seconds.
     """
-    t2 = rclpy.time.Time.from_msg(agents[len(agents) - 1].header.stamp)
+    last = next((i for i, r in enumerate(robot) if at_goal(r)), len(agents) - 1)
+    t2 = rclpy.time.Time.from_msg(agents[last].header.stamp)
     t1 = rclpy.time.Time.from_msg(agents[0].header.stamp)
     dur = t2 - t1
     secs = dur.nanoseconds / 1e9
@@ -182,17 +203,20 @@ def avg_closest_person(agents: List[Agents], robot: List[Agent]) -> List[float]:
         and a list of minimum distances for each robot.
     """
     min_dist_list = []
-    avg_dist = 0
     for i in range(len(robot)):
         min_dist = np.inf
         for agent in agents[i].agents:
             d = agent_distance(robot[i], agent)
-            min_dist = max(min(min_dist, d), 0.0)  # Ensure non-negative distance
-        if len(agents[i].agents) > 0:
-            avg_dist += min_dist
-            min_dist_list.append(min_dist)
+            min_dist = min(min_dist, d)  # negative when the bodies overlap
+        # A step without people has no closest person: NaN keeps the per-step
+        # list aligned with the time stamps and out of the average.
+        min_dist_list.append(min_dist if len(agents[i].agents) > 0 else np.nan)
 
-    avg_dist = avg_dist / len(robot)
+    avg_dist = (
+        float(np.nanmean(min_dist_list))
+        if np.isfinite(min_dist_list).any()
+        else 0.0
+    )
     rclpy.logging.get_logger("hunav_evaluator").debug(
         f"Average_closest_person: {avg_dist:.2f} m"
     )
@@ -213,7 +237,7 @@ def minimum_distance_to_people(agents: List[Agents], robot: List[Agent]) -> List
     for i in range(len(robot)):
         for agent in agents[i].agents:
             d = agent_distance(robot[i], agent)
-            min_distance.append(max(d, 0.0))  # Ensure non-negative distance
+            min_distance.append(d)  # negative when the bodies overlap
     min_dist = min(min_distance)
 
     rclpy.logging.get_logger("hunav_evaluator").debug(
@@ -265,20 +289,19 @@ def space_intrusions(
     """
 
     space_intrusions = 0
-    space_intrusions_list = [0] * len(robot)
+    measured = 0
+    space_intrusions_list = [np.nan] * len(robot)
 
     for i in range(len(robot)):
-        min_dist = np.inf
-        for agent in agents[i].agents:
-            d = agent_distance(robot[i], agent)
-            min_dist = max(min(min_dist, d), 0.0)  # Ensure non-negative distance
-        indicator = indicator_function_space(min_dist, k)
-        if indicator:
-            space_intrusions += 1
-            space_intrusions_list[i] = 1
+        if not agents[i].agents:
+            continue  # nobody to intrude on: the step is left out
+        min_dist = min(agent_distance(robot[i], agent) for agent in agents[i].agents)
+        indicator = int(indicator_function_space(min_dist, k))
+        space_intrusions += indicator
+        measured += 1
+        space_intrusions_list[i] = indicator
 
-    space_intrusions = space_intrusions / len(space_intrusions_list)
-    percentage = space_intrusions * 100.0
+    percentage = space_intrusions / measured * 100.0 if measured else 0.0
 
     return percentage, space_intrusions_list
 
@@ -350,9 +373,10 @@ def detect_groups(agents: List[Agents]) -> List[int]:
         List[int]: A list of unique group IDs found in the agents.
     """
     group_ids = []
-    for a in agents[0].agents:
-        if a.group_id != -1 and ((a.group_id in group_ids) == False):
-            group_ids.append(a.group_id)
+    for step in agents:
+        for a in step.agents:
+            if a.group_id != -1 and a.group_id not in group_ids:
+                group_ids.append(a.group_id)
 
     return group_ids
 
@@ -377,20 +401,24 @@ def group_space_intrusions(
 
     d = 1.5
     space_intrusions = 0
-    group_list = [0] * len(robot)
+    measured = 0
+    group_list = [np.nan] * len(robot)
     for i in range(len(robot)):
         min_dist = np.inf
         for id in group_ids:
+            if not any(a.group_id == id for a in agents[i].agents):
+                continue  # no member of this group at this step
             group_center = get_group_center(agents[i].agents, id, d)
             dist = euclidean_distance(robot[i].position, group_center) - robot[i].radius
-            min_dist = max(min(min_dist, dist), 0.0)  # Ensure non-negative distance
-        indicator = indicator_function_space(min_dist, k)
-        if indicator:
-            space_intrusions += 1
-            group_list[i] = 1
+            min_dist = min(min_dist, dist)
+        if min_dist == np.inf:
+            continue  # no group at this step: it is left out
+        indicator = int(indicator_function_space(min_dist, k))
+        space_intrusions += indicator
+        measured += 1
+        group_list[i] = indicator
 
-    space_intrusions = space_intrusions / len(group_list)
-    percentage = space_intrusions * 100.0
+    percentage = space_intrusions / measured * 100.0 if measured else 0.0
 
     return [percentage, group_list]
 
@@ -477,7 +505,10 @@ def group_public_space_intrusions(
 
 
 def collisions(agents: List[Agents], robot: List[Agent]) -> List[int]:
-    """Computes the number of collisions between robots and persons based on their positions and velocities.
+    """Counts the collisions between the robot and persons. A step is a contact
+    when the bodies are less than 0.02 m apart; a collision is each time the robot
+    and a person come into contact (so the count does not depend on the sampling
+    rate), attributed at its first contact step by heading.
     Args:
         agents (List[Agents]): List of Agents messages containing the agents' states.
         robot (List[Agent]): List of Agent messages representing the robot's state.
@@ -489,8 +520,10 @@ def collisions(agents: List[Agents], robot: List[Agent]) -> List[int]:
     person_coll_list = [0] * len(robot)
     robot_collisions = 0
     person_collisions = 0
+    in_contact = set()  # ids of the persons touching the robot at the previous step
 
     for i in range(len(robot)):
+        touching = set()
         for agent in agents[i].agents:
 
             if (
@@ -499,6 +532,9 @@ def collisions(agents: List[Agents], robot: List[Agent]) -> List[int]:
                 - agent.radius
                 < 0.02
             ):
+                touching.add(agent.id)
+                if agent.id in in_contact:
+                    continue  # the same collision, still going on
 
                 # Robot's angle
                 nrx = (
@@ -532,36 +568,20 @@ def collisions(agents: List[Agents], robot: List[Agent]) -> List[int]:
                 ) * math.cos(
                     robot[i].yaw
                 )
-                alpha2 = math.atan2(nrx, nry)
+                alpha2 = math.atan2(nry, nrx)
 
-                if abs(alpha) < abs(alpha2) and robot[i].linear_vel > agent.linear_vel:
+                # alpha: where the robot lies seen from the person; alpha2: where
+                # the person lies seen from the robot. Whoever has the other more
+                # in front ran into it; a tie counts for both.
+                # (float32 yaws: a tie is equal to about 1e-7 rad)
+                tie = math.isclose(abs(alpha), abs(alpha2), abs_tol=1e-6)
+                if abs(alpha2) < abs(alpha) or tie:
                     robot_collisions += 1
                     robot_coll_list[i] = 1
-                elif (
-                    abs(alpha) > abs(alpha2) and robot[i].linear_vel < agent.linear_vel
-                ):
+                if abs(alpha) < abs(alpha2) or tie:
                     person_collisions += 1
                     person_coll_list[i] = 1
-                elif (
-                    abs(alpha) < abs(alpha2) and robot[i].linear_vel < agent.linear_vel
-                ):
-                    # person_collision += 1
-                    robot_collisions += 1
-                    robot_coll_list[i] = 1
-                elif (
-                    abs(alpha) > abs(alpha2) and robot[i].linear_vel > agent.linear_vel
-                ):
-                    # robot_collision += 1
-                    person_collisions += 1
-                    person_coll_list[i] = 1
-                elif (
-                    abs(alpha) == abs(alpha2)
-                    and robot[i].linear_vel == agent.linear_vel
-                ):
-                    robot_collisions += 1
-                    person_collisions += 1
-                    robot_coll_list[i] = 1
-                    person_coll_list[i] = 1
+        in_contact = touching
 
     return robot_collisions, person_collisions, robot_coll_list, person_coll_list
 
@@ -597,24 +617,32 @@ def person_on_robot_collision(agents: List[Agents], robot: List[Agent]) -> List[
     return [collision[1], collision[3]]
 
 
-def time_not_moving(agents: List[Agents], robot: List[Agent]) -> List[float]:
-    """Computes the total time the robot is not moving based on its linear and angular velocities.
+def time_not_moving(
+    agents: List[Agents],
+    robot: List[Agent],
+    min_velocity: float = 0.08,
+    min_angular_velocity: float = 0.01,
+) -> List[float]:
+    """Computes the total time the robot is not moving: the time step before each
+    step where its speed is under min_velocity and its angular speed under
+    min_angular_velocity (the thresholds of social_evaluation's metrics.yaml).
     Args:
         agents (List[Agents]): List of Agents messages containing the agents' states.
         robot (List[Agent]): List of Agent messages representing the robot's state.
+        min_velocity (float): Speed (m/s) under which the robot is not moving.
+        min_angular_velocity (float): Angular speed (rad/s) under which it is not turning.
     Returns:
         List[float]: A list containing the total time the robot is not moving in seconds and a list indicating which robots are not moving (1 for not moving, 0 for moving).
     """
 
-    not_moving = [0] * len(robot)
-    time_step = total_time(agents, robot)[0] / len(agents)
-
-    count = 0
-    for index, r in enumerate(robot):
-        if r.linear_vel < 0.01 and abs(r.angular_vel < 0.02):
-            count = count + 1
-            not_moving[index] = 1
-    time_stopped = time_step * count
+    stamps = get_time_stamps(agents, robot)
+    not_moving = [
+        int(r.linear_vel < min_velocity and abs(r.angular_vel) < min_angular_velocity)
+        for r in robot
+    ]
+    time_stopped = sum(
+        stamps[i] - stamps[i - 1] for i in range(1, len(robot)) if not_moving[i]
+    )
     rclpy.logging.get_logger("hunav_evaluator").debug(
         f"Time_not_moving: {time_stopped:.2f} secs"
     )
@@ -622,20 +650,15 @@ def time_not_moving(agents: List[Agents], robot: List[Agent]) -> List[float]:
 
 
 def goal_reached(agents: List[Agents], robot: List[Agent]) -> List[bool]:
-    """Checks if the robot has reached its goal based on the distance to the goal.
+    """Checks if the robot ended the run at its goal (SEAN 2.0): its final
+    position within goal_radius (the goal tolerance) of the goal.
     Args:
         agents (List[Agents]): List of Agents messages containing the agents' states.
         robot (List[Agent]): List of Agent messages representing the robot's state.
         Returns:
         List[bool]: A list containing a boolean indicating whether the robot has reached its goal.
     """
-    mind = 0.3
-    if len(robot[-1].goals):
-        for g in robot[-1].goals:
-            dist = euclidean_distance(robot[-1].position, g) - robot[-1].goal_radius
-            if dist < mind:
-                return [True]
-    return [False]
+    return [at_goal(robot[-1])]
 
 
 def final_goal_distance(agents: List[Agents], robot: List[Agent]) -> List[float]:
@@ -720,65 +743,105 @@ def avg_robot_angular_speed(agents: List[Agents], robot: List[Agent]) -> List[fl
     return [speed, speed_list]
 
 
-def avg_acceleration(agents: List[Agents], robot: List[Agent]) -> List[float]:
-    """Computes the average robot acceleration based on the robot's linear velocities.
+def rate_filter(time: pd.Series, rate_window: float, smoothing_time: float):
+    """The sample count and moving-average factor of a rate over ``rate_window``
+    seconds smoothed with time constant ``smoothing_time``, at the median sample
+    step (as social_evaluation computes them), so acceleration and jerk are
+    comparable whatever the recording rate.
+    """
+    times = np.unique(time.dropna().to_numpy(dtype=float))
+    dt = float(np.median(np.diff(times))) if len(times) > 1 else rate_window
+    return max(1, int(round(rate_window / dt))), float(1.0 - np.exp(-dt / smoothing_time))
+
+
+def _filtered_rate(
+    time: pd.Series, value: pd.Series, period: int, limit: float, alpha: float
+) -> pd.Series:
+    """The rate of change of ``value``, filtered as social_evaluation filters it:
+    differences over ``period`` samples, values above ``limit`` blanked and
+    interpolated (cubic), then an exponential moving average of factor ``alpha``
+    (both from rate_filter).
+    Indexed like ``value``; samples where it is undefined are left out.
+    """
+    rate = value.diff(periods=period) / time.diff(periods=period)
+    rate[rate.abs() > limit] = np.nan
+    try:
+        rate = rate.interpolate(method="cubic", order=3)
+    except (ValueError, TypeError):  # too few samples for a cubic
+        rate = rate.interpolate(method="linear")
+    return rate.dropna().ewm(alpha=alpha).mean()
+
+
+def avg_acceleration(
+    agents: List[Agents],
+    robot: List[Agent],
+    rate_window: float = 0.5,
+    max_accel: float = 2.5,
+    smoothing_time: float = 0.949,
+) -> List[float]:
+    """Computes the average magnitude of the robot's acceleration, filtered as in
+    social_evaluation (see _filtered_rate).
     Args:
         agents (List[Agents]): List of Agents messages containing the agents' states.
         robot (List[Agent]): List of Agent messages representing the robot's state.
+        rate_window (float): Seconds the speed is differenced over.
+        max_accel (float): Accelerations (m/s^2) above this are treated as outliers.
+        smoothing_time (float): Time constant (s) of the exponential moving average.
     Returns:
         List[float]: A list containing the average robot acceleration and a list of individual acceleration values.
     """
-    acceleration = 0
-    acceleration_list = [0.0]
-    for i in range(len(robot) - 1):
-        dv = robot[i + 1].linear_vel - robot[i].linear_vel
-        tf = rclpy.time.Time.from_msg(agents[i + 1].header.stamp)
-        ti = rclpy.time.Time.from_msg(agents[i].header.stamp)
-        dt = (tf - ti).nanoseconds / 1e9
-        if dt != 0.0:
-            accel = dv / dt
-            acceleration += np.abs(accel)
-            acceleration_list.append(accel)
-        else:
-            acceleration_list.append(0.0)
-
-    acceleration = acceleration / len(robot)
+    time = pd.Series(get_time_stamps(agents, robot), dtype=float)
+    speed = pd.Series([r.linear_vel for r in robot], dtype=float)
+    period, alpha = rate_filter(time, rate_window, smoothing_time)
+    acceleration = _filtered_rate(time, speed, period, max_accel, alpha)
+    value = float(acceleration.abs().mean()) if len(acceleration) else 0.0
 
     rclpy.logging.get_logger("hunav_evaluator").debug(
-        f"Average_robot_acceleration: {acceleration:.5f} m/s^2"
+        f"Average_robot_acceleration: {value:.5f} m/s^2"
     )
-    return [acceleration, acceleration_list]
+    return [value, acceleration.reindex(range(len(robot))).tolist()]
 
 
-def avg_overacceleration(agents: List[Agents], robot: List[Agent]) -> List[float]:
-    """Computes the average robot jerk (over-acceleration) based on the robot's linear velocities.
+def avg_overacceleration(
+    agents: List[Agents],
+    robot: List[Agent],
+    rate_window: float = 0.5,
+    max_accel: float = 2.5,
+    max_jerk: float = 2.5,
+    smoothing_time: float = 0.949,
+) -> List[float]:
+    """Computes the average magnitude of the robot's jerk (over-acceleration): the
+    rate of change of the filtered acceleration, filtered the same way, as in
+    social_evaluation.
     Args:
         agents (List[Agents]): List of Agents messages containing the agents' states.
         robot (List[Agent]): List of Agent messages representing the robot's state.
+        rate_window (float): Seconds each rate is differenced over.
+        max_accel (float): Accelerations (m/s^2) above this are treated as outliers.
+        max_jerk (float): Jerks (m/s^3) above this are treated as outliers.
+        smoothing_time (float): Time constant (s) of the exponential moving average.
     Returns:
         List[float]: A list containing the average robot jerk (over-acceleration) and a list of individual jerk values.
     """
-    jerk = 0
-    jerk_list = [0.0]
-    for i in range(len(robot) - 1):
-        dv = robot[i + 1].linear_vel - robot[i].linear_vel
-        tf = rclpy.time.Time.from_msg(agents[i + 1].header.stamp)
-        ti = rclpy.time.Time.from_msg(agents[i].header.stamp)
-        dur = (tf - ti).to_msg()
-        dt = float(dur.sec + dur.nanosec / 1e9)
-        if dt != 0.0:
-            acceleration = dv / dt
-            jerk += np.abs(acceleration / dt)
-            jerk_list.append(acceleration / dt)
-        else:
-            jerk_list.append(0.0)
-
-    jerk = jerk / len(robot)
+    time = pd.Series(get_time_stamps(agents, robot), dtype=float)
+    speed = pd.Series([r.linear_vel for r in robot], dtype=float)
+    period, alpha = rate_filter(time, rate_window, smoothing_time)
+    acceleration = _filtered_rate(time, speed, period, max_accel, alpha)
+    # the acceleration's own samples, renumbered as social_evaluation does
+    jerk = _filtered_rate(
+        time[acceleration.index].reset_index(drop=True),
+        acceleration.reset_index(drop=True),
+        period,
+        max_jerk,
+        alpha,
+    )
+    value = float(jerk.abs().mean()) if len(jerk) else 0.0
+    jerk.index = acceleration.index[jerk.index]
 
     rclpy.logging.get_logger("hunav_evaluator").debug(
-        f"Average_robot_jerk(over_acceleration): {jerk:.5f} m/s^3"
+        f"Average_robot_jerk(over_acceleration): {value:.5f} m/s^3"
     )
-    return [jerk, jerk_list]
+    return [value, jerk.reindex(range(len(robot))).tolist()]
 
 
 # Learning a Group-Aware Policy for Robot Navigation
@@ -794,18 +857,20 @@ def avg_pedestrian_velocity(agents: List[Agents], robot: List[Agent]) -> List[fl
         List[float]: A list containing the average pedestrian speed and a list of individual pedestrian speeds.
     """
     speed = 0
+    samples = 0
     speed_list = []
     for i in range(len(agents)):
         speed2 = 0.0
         for agent in agents[i].agents:
             speed += agent.linear_vel
             speed2 += agent.linear_vel
+        samples += len(agents[i].agents)
         if len(agents[i].agents) > 0:
             speed_list.append(speed2 / len(agents[i].agents))
         else:
             speed_list.append(0.0)
 
-    speed = speed / (len(agents) * len(agents[0].agents))
+    speed = speed / samples if samples else 0.0
 
     rclpy.logging.get_logger("hunav_evaluator").debug(
         f"Average_Pedestrian_speed: {speed:.2f} m/s"
@@ -852,16 +917,11 @@ def social_force_on_agents(agents: List[Agents], robot: List[Agent]) -> List[flo
         agents (List[Agents]): List of Agents messages containing the agents' states.
         robot (List[Agent]): List of Agent messages representing the robot's state.
     Returns:
-        List[float]: A list containing the cumulative social force and a list of individual social forces for each robot.
+        List[float]: The social force integrated over time (N s) and the force at each step.
     """
     sfm = SFM()
-    sf = 0.0
-    sf_list = []
-    for agts, rb in zip(agents, robot):
-        f = sfm.modulusSocialForce2(rb, agts)
-        sf += f
-        sf_list.append(f)
-    return [sf, sf_list]
+    sf_list = [sfm.modulusSocialForce2(rb, agts) for agts, rb in zip(agents, robot)]
+    return [time_integral(sf_list, agents), sf_list]
 
 
 # cumulative modulus of the social force provoked
@@ -872,16 +932,11 @@ def social_force_on_robot(agents: List[Agents], robot: List[Agent]) -> List[floa
         agents (List[Agents]): List of Agents messages containing the agents' states.
         robot (List[Agent]): List of Agent messages representing the robot's state.
     Returns:
-        List[float]: A list containing the cumulative social force and a list of individual social forces for each robot.
+        List[float]: The social force integrated over time (N s) and the force at each step.
     """
     sfm = SFM()
-    sf = 0.0
-    sf_list = []
-    for agts, rb in zip(agents, robot):
-        f = sfm.modulusSocialForce(rb, agts)
-        sf += f
-        sf_list.append(f)
-    return [sf, sf_list]
+    sf_list = [sfm.modulusSocialForce(rb, agts) for agts, rb in zip(agents, robot)]
+    return [time_integral(sf_list, agents), sf_list]
 
 
 # cumulative social work employed in this planner:
@@ -892,16 +947,24 @@ def social_work(agents: List[Agents], robot: List[Agent]) -> List[float]:
         agents (List[Agents]): List of Agents messages containing the agents' states.
         robot (List[Agent]): List of Agent messages representing the robot's state.
     Returns:
-        List[float]: A list containing the cumulative social work and a list of individual social work values for each robot.
+        List[float]: The social work integrated over time (N s) and the work at each step.
     """
     sfm = SFM()
-    sw = 0.0
-    sw_list = []
-    for agts, rb in zip(agents, robot):
-        f = sfm.computeSocialWork(rb, agts)
-        sw += f
-        sw_list.append(f)
-    return [sw, sw_list]
+    sw_list = [sfm.computeSocialWork(rb, agts) for agts, rb in zip(agents, robot)]
+    return [time_integral(sw_list, agents), sw_list]
+
+
+def social_work_per_second(agents: List[Agents], robot: List[Agent]) -> List[float]:
+    """Computes the social work per second: its time integral over the recording time.
+    Args:
+        agents (List[Agents]): List of Agents messages containing the agents' states.
+        robot (List[Agent]): List of Agent messages representing the robot's state.
+    Returns:
+        List[float]: The social work per second (N) and the work at each step.
+    """
+    total, sw_list = social_work(agents, robot)
+    duration = get_time_stamps(agents, robot)[-1]
+    return [total / duration if duration > 0 else 0.0, sw_list]
 
 
 # cumulative obstacle force on the agents
@@ -915,16 +978,11 @@ def obstacle_force_on_agents(agents: List[Agents], robot: List[Agent]) -> List[f
         and a list of individual obstacle forces for each agent.
     """
     sfm = SFM()
-    of = 0.0
     of_list = []
     for agts in agents:
-        avg = 0.0
-        for a in agts.agents:
-            avg += np.linalg.norm(sfm.computeObstacleForce(a))
-        avg = avg / len(agts.agents)
-        of += avg
-        of_list.append(avg)
-    return [of, of_list]
+        forces = [np.linalg.norm(sfm.computeObstacleForce(a)) for a in agts.agents]
+        of_list.append(float(np.mean(forces)) if forces else 0.0)
+    return [time_integral(of_list, agents), of_list]
 
 
 # cumulative obstacle force on the robot
@@ -939,13 +997,8 @@ def obstacle_force_on_robot(agents: List[Agents], robot: List[Agent]) -> List[fl
         and a list of individual obstacle forces for each robot.
     """
     sfm = SFM()
-    of = 0.0
-    of_list = []
-    for r in robot:
-        f = np.linalg.norm(sfm.computeObstacleForce(r))
-        of += f
-        of_list.append(f)
-    return [of, of_list]
+    of_list = [float(np.linalg.norm(sfm.computeObstacleForce(r))) for r in robot]
+    return [time_integral(of_list, agents), of_list]
 
 
 # TODO
@@ -989,9 +1042,11 @@ metrics = {
     "intimate_space_intrusions": intimate_space_intrusions,
     "personal_space_intrusions": personal_space_intrusions,
     "social_space_intrusions": social_space_intrusions,
+    "public_space_intrusions": public_space_intrusions,
     "group_intimate_space_intrusions": group_intimate_space_intrusions,
     "group_personal_space_intrusions": group_personal_space_intrusions,
     "group_social_space_intrusions": group_social_space_intrusions,
+    "group_public_space_intrusions": group_public_space_intrusions,
     # N. Tsoi, A. Xiang, P. Yu, S. S. Sohn, G. Schwartz, S. Ramesh,
     # M. Hussein, A. W. Gupta, M. Kapadia, and M. V ́azquez, “Sean 2.0:
     # Formalizing and generating social situations for robot navigation,”
@@ -1039,6 +1094,7 @@ metrics = {
     "social_force_on_agents": social_force_on_agents,
     "social_force_on_robot": social_force_on_robot,
     "social_work": social_work,
+    "social_work_per_second": social_work_per_second,
     "obstacle_force_on_robot": obstacle_force_on_robot,
     "obstacle_force_on_agents": obstacle_force_on_agents,
 }

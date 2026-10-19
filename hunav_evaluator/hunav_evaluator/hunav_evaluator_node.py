@@ -1,6 +1,7 @@
 import numpy as np
 import sys
 import os
+from functools import partial
 from itertools import combinations
 
 import rclpy
@@ -45,6 +46,46 @@ class HunavEvaluatorNode(Node):
         # base name of the result files
         self.declare_parameter("result_file", "metrics")
 
+        # Body radii used by every metric, in place of the radii in the HuNav
+        # messages (0.4 m per person from agents.yaml, 0.35 m for every robot in
+        # the Gazebo plugin), so this evaluator and social_evaluation measure the
+        # same bodies. A robot takes the radius of the longest name prefix in
+        # robot_radius_names (turtlebot2_1 -> turtlebot2), else robot_radius.
+        self.agent_radius = self.declare_parameter("agent_radius", 0.3).value
+        self.robot_radius = self.declare_parameter("robot_radius", 0.27).value
+        self.robot_radii = dict(
+            zip(
+                self.declare_parameter(
+                    "robot_radius_names", ["turtlebot2", "jackal"]
+                ).value,
+                self.declare_parameter("robot_radius_values", [0.178, 0.326]).value,
+            )
+        )
+        # Goal tolerance (m) on the robot centre, for time_to_reach_goal and
+        # completed; carried to the metrics in each robot's goal_radius.
+        self.goal_tolerance = self.declare_parameter("goal_tolerance", 0.4).value
+        # Thresholds under which the robot counts as not moving (time_not_moving).
+        self.metric_functions = dict(hunav_metrics.metrics)
+        self.metric_functions["time_not_moving"] = partial(
+            hunav_metrics.time_not_moving,
+            min_velocity=self.declare_parameter("min_velocity", 0.08).value,
+            min_angular_velocity=self.declare_parameter("min_angular_velocity", 0.01).value,
+        )
+        # Filter of the acceleration and jerk metrics (as in social_evaluation).
+        filter_params = dict(
+            rate_window=self.declare_parameter("rate_window", 0.5).value,
+            max_accel=self.declare_parameter("max_accel", 2.5).value,
+            smoothing_time=self.declare_parameter("smoothing_time", 0.949).value,
+        )
+        self.metric_functions["avg_acceleration"] = partial(
+            hunav_metrics.avg_acceleration, **filter_params
+        )
+        self.metric_functions["avg_overacceleration"] = partial(
+            hunav_metrics.avg_overacceleration,
+            max_jerk=self.declare_parameter("max_jerk", 2.5).value,
+            **filter_params,
+        )
+
         self.metrics_to_compute = self.get_metrics_to_compute()
 
         self.get_logger().info("Hunav evaluator:")
@@ -68,12 +109,14 @@ class HunavEvaluatorNode(Node):
             Empty, "hunav_stop_recording", self.recording_service_stop
         )
 
+        # Queues of 10 so a slow callback drops fewer messages; the two streams
+        # are paired by stamp afterwards (see _paired_steps).
         self.agent_sub = self.create_subscription(
-            Agents, "human_states", self.human_callback, 1
+            Agents, "human_states", self.human_callback, 10
         )
         # robot_states now carries every robot (one Agent per robot).
         self.robot_sub = self.create_subscription(
-            Agents, "robot_states", self.robot_callback, 1
+            Agents, "robot_states", self.robot_callback, 10
         )
 
     def recording_service_start(
@@ -122,6 +165,8 @@ class HunavEvaluatorNode(Node):
         Args:
             msg (Agents): The message containing the human agents data."""
         if self.recording:
+            for a in msg.agents:
+                a.radius = self.agent_radius
             if self.freq == 0.0:
                 self.agents_list.append(msg)
             else:
@@ -140,16 +185,24 @@ class HunavEvaluatorNode(Node):
             # Inject each robot's goal: its own goal if provided, else the shared
             # robot_goal. Used by the goal-distance metrics.
             for r in robots_msg.agents:
+                r.radius = self.radius_for(r.name)
                 goal = self.robot_goals.get(r.name, self.robot_goal)
                 if goal is not None:
                     r.goals.clear()
                     r.goals.append(goal.pose)
-                    r.goal_radius = 0.2
+                    r.goal_radius = float(self.goal_tolerance)
 
             if self.freq == 0.0:
                 self.robots_list.append(robots_msg)
             else:
                 self.robots = robots_msg
+
+    def radius_for(self, robot_name: str) -> float:
+        """This robot's body radius: the longest matching name prefix, else robot_radius."""
+        matches = [key for key in self.robot_radii if robot_name.startswith(key)]
+        if matches:
+            return float(self.robot_radii[max(matches, key=len)])
+        return float(self.robot_radius)
 
     def timer_record_callback(self):
         """Timer callback to record the data at the specified frequency
@@ -157,6 +210,46 @@ class HunavEvaluatorNode(Node):
         if self.recording == True:
             self.agents_list.append(self.agents)
             self.robots_list.append(self.robots)
+
+    def _paired_steps(self):
+        """The recorded human and robot messages, paired step by step.
+
+        HuNav publishes human_states and robot_states back to back with the same
+        stamp, so each robot message is paired with the human message of its
+        stamp: a message dropped on either topic then loses one step instead of
+        shifting every later pair. Without unique robot stamps (a HuNav plugin
+        built before it stamped robot_states) the messages are paired by
+        position. With frequency > 0 the timer already stores them together.
+        """
+        if self.freq > 0.0:
+            n = min(len(self.agents_list), len(self.robots_list))
+            return self.agents_list[:n], self.robots_list[:n]
+
+        def stamp(msg):
+            return (msg.header.stamp.sec, msg.header.stamp.nanosec)
+
+        robot_stamps = [stamp(m) for m in self.robots_list]
+        if len(set(robot_stamps)) < len(robot_stamps):
+            self.get_logger().warn(
+                "robot_states stamps are not unique (HuNav plugin without robot "
+                "stamps?): pairing the messages by position"
+            )
+            n = min(len(self.agents_list), len(self.robots_list))
+            return self.agents_list[:n], self.robots_list[:n]
+
+        humans = {stamp(m): m for m in self.agents_list}
+        pairs = [
+            (humans[key], robots)
+            for key, robots in zip(robot_stamps, self.robots_list)
+            if key in humans
+        ]
+        unmatched = len(self.robots_list) - len(pairs)
+        if unmatched:
+            self.get_logger().warn(
+                f"{unmatched} robot_states messages have no human_states message "
+                "with the same stamp; leaving them out"
+            )
+        return [h for h, _ in pairs], [r for _, r in pairs]
 
     def _robot_series(self):
         """Transpose robots_list (one Agents msg per step) into per-robot series.
@@ -168,9 +261,8 @@ class HunavEvaluatorNode(Node):
               agents_for : {name -> [Agents, ...]} the matching human messages
                            (same length as series[name]).
         """
-        n = min(len(self.agents_list), len(self.robots_list))
-        agents_list = self.agents_list[:n]
-        robots_list = self.robots_list[:n]
+        agents_list, robots_list = self._paired_steps()
+        n = len(robots_list)
 
         names = []
         for ag in robots_list:
@@ -196,7 +288,7 @@ class HunavEvaluatorNode(Node):
         results = {}
         steps = {"time_stamps": hunav_metrics.get_time_stamps(agents_list, robot_list)}
         for m in self.metrics_to_compute.keys():
-            metric = hunav_metrics.metrics[m](agents_list, robot_list)
+            metric = self.metric_functions[m](agents_list, robot_list)
             results[m] = metric[0]
             if len(metric) > 1:
                 steps[m] = metric[1]
@@ -302,7 +394,7 @@ class HunavEvaluatorNode(Node):
         self.metrics_lists = {"behavior_active": beh_active}
         # then, compute the metrics for those agents
         for m in self.metrics_to_compute.keys():
-            metric = hunav_metrics.metrics[m](beh_agents, beh_robot)
+            metric = self.metric_functions[m](beh_agents, beh_robot)
             metrics[m] = metric[0]
             if len(metric) > 1:  # if the metric function returns more than one value,
                 self.metrics_lists[m] = metric[1]
@@ -427,9 +519,7 @@ class HunavEvaluatorNode(Node):
         if min_length == 0:
             self.get_logger().error("No data collected. Cannot compute metrics.")
             return False
-        # resize the lists to the minimum length
-        self.agents_list = self.agents_list[:min_length]
-        self.robots_list = self.robots_list[:min_length]
+        # the two lists may differ in length: _paired_steps matches them up
         return True
 
     @property

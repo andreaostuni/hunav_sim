@@ -76,6 +76,9 @@ class SFM:
         It computes the obstacle force for the agent
         based on its position and the closest obstacles.
         If the agent has no closest obstacles, it returns a zero vector.
+        The obstacles are HuNav's closest-obstacle points (from the Gazebo world),
+        averaged; social_evaluation uses the nearest occupied cell of the map image
+        instead, so the two evaluators differ on this force.
         Args:
             agent (Agent): The agent for which to compute the obstacle force.
         Returns:
