@@ -31,6 +31,10 @@ hunav_evaluator_node:
     min_velocity: 0.08
     min_angular_velocity: 0.01
 
+    # Body gap (m) under which a person interacts with the robot: social_work_interaction
+    # averages the social work only over that time (3.6 m = the social-space boundary).
+    interaction_distance: 3.6
+
     # Acceleration and jerk, filtered as in social_evaluation's metrics.yaml:
     # rates over rate_window seconds, values above max_accel (m/s^2) / max_jerk
     # (m/s^3) treated as outliers, then an exponential moving average of time
@@ -90,5 +94,6 @@ hunav_evaluator_node:
       # https://github.com/robotics-upo/social_force_window_planner
       social_work: true
       social_work_per_second: true
+      social_work_interaction: true
       obstacle_force_on_robot: true
       obstacle_force_on_agents: true

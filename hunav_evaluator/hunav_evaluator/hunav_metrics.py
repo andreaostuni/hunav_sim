@@ -967,6 +967,32 @@ def social_work_per_second(agents: List[Agents], robot: List[Agent]) -> List[flo
     return [total / duration if duration > 0 else 0.0, sw_list]
 
 
+def social_work_interaction(
+    agents: List[Agents], robot: List[Agent], interaction_distance: float = 3.6
+) -> List[float]:
+    """Computes the social work per second of interaction: the per-step social work averaged
+    over time only on the steps where a person's body is closer than interaction_distance to
+    the robot's (default: the social-space boundary, 3.6 m), as in social_evaluation, so steps
+    with nobody around do not dilute it. 0 when nobody comes that close.
+    Args:
+        agents (List[Agents]): List of Agents messages containing the agents' states.
+        robot (List[Agent]): List of Agent messages representing the robot's state.
+        interaction_distance (float): Body gap (m) under which the robot interacts.
+    Returns:
+        List[float]: The social work per second of interaction (N) and, per step,
+        1 when a person is within interaction_distance.
+    """
+    _, sw_list = social_work(agents, robot)
+    stamps = np.asarray(get_time_stamps(agents, robot))
+    interacting = np.array([any(agent_distance(r, a) < interaction_distance for a in step.agents)
+                            for step, r in zip(agents, robot)])
+    # each step stands for the interval before it
+    weights = np.diff(stamps, prepend=stamps[0]) * interacting
+    total = weights.sum()
+    value = float(np.dot(sw_list, weights) / total) if total > 0 else 0.0
+    return [value, interacting.astype(int).tolist()]
+
+
 # cumulative obstacle force on the agents
 def obstacle_force_on_agents(agents: List[Agents], robot: List[Agent]) -> List[float]:
     """Computes the cumulative obstacle force on the agents.
@@ -1095,6 +1121,7 @@ metrics = {
     "social_force_on_robot": social_force_on_robot,
     "social_work": social_work,
     "social_work_per_second": social_work_per_second,
+    "social_work_interaction": social_work_interaction,
     "obstacle_force_on_robot": obstacle_force_on_robot,
     "obstacle_force_on_agents": obstacle_force_on_agents,
 }

@@ -10,6 +10,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(hunav_msgs REQUIRED)
 find_package(people_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED) 
 find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
@@ -34,7 +35,7 @@ include_directories(
 )
 
 add_executable(hunav_agent_manager src/agent_manager_node.cpp src/agent_manager.cpp src/motion_models.cpp src/time_expired_condition.cpp src/bt_functions.cpp src/bt_node.cpp)
-ament_target_dependencies(hunav_agent_manager rclcpp hunav_msgs people_msgs geometry_msgs visualization_msgs nav2_behavior_tree tf2 tf2_ros behaviortree_cpp)
+ament_target_dependencies(hunav_agent_manager rclcpp hunav_msgs people_msgs std_msgs geometry_msgs visualization_msgs nav2_behavior_tree tf2 tf2_ros behaviortree_cpp)
 target_link_libraries(hunav_agent_manager RVO)
 
 

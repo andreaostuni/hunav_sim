@@ -969,6 +969,30 @@ void AgentManager::resetEpisode()
   printf("[MM strategy=%s] episode advanced to %d\n", motionModelStrategyToString(mm_strategy_), episode_index_);
 }
 
+int AgentManager::episodeIndex()
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+  return episode_index_;
+}
+
+MotionModelAssignment AgentManager::motionModelAssignment()
+{
+  std::lock_guard<std::mutex> guard(mutex_);
+  MotionModelAssignment assignment;
+  assignment.episode = episode_index_;
+  assignment.strategy = motionModelStrategyToString(mm_strategy_);
+  if (!agents_initialized_)
+    return assignment;
+  std::vector<int> ids;
+  ids.reserve(agents_.size());
+  for (const auto& kv : agents_)
+    ids.push_back(kv.first);
+  std::sort(ids.begin(), ids.end());
+  for (int id : ids)
+    assignment.models.emplace_back(agents_[id].name, motionModelToString(agents_[id].motionModel));
+  return assignment;
+}
+
 void AgentManager::assignMotionModels()
 {
   // Fixed keeps the default_motion_model_ + per-agent overrides already

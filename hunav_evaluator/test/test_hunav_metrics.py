@@ -285,3 +285,23 @@ def test_acceleration_and_jerk_do_not_depend_on_the_sampling_rate():
     finally:
         DT = saved
     np.testing.assert_allclose(values[0.01], values[0.1], rtol=0.1)
+
+
+def test_social_work_interaction_ignores_time_without_people():
+    # a person next to the robot for the first half, 20 m away for the second
+    steps = 101
+    robot = [_agent(agent_id=100) for _ in range(steps)]
+    near_then_far = [_step(k, [_agent(x=1.0 if k < 50 else 20.0, agent_id=1)]) for k in range(steps)]
+    interaction, flags = hm.social_work_interaction(near_then_far, robot)
+    per_second, _ = hm.social_work_per_second(near_then_far, robot)
+    assert sum(flags) == 50
+    assert interaction > 1.8 * per_second  # the far half no longer dilutes it
+    always = [_step(k, [_agent(x=1.0, agent_id=1)]) for k in range(steps)]
+    assert hm.social_work_interaction(always, robot)[0] == pytest.approx(
+        hm.social_work_per_second(always, robot)[0], rel=0.02)
+    nobody = [_step(k, [_agent(x=20.0, agent_id=1)]) for k in range(steps)]
+    assert hm.social_work_interaction(nobody, robot)[0] == 0.0
+
+
+def test_evaluator_binds_the_interaction_distance(evaluator):
+    assert evaluator.metric_functions['social_work_interaction'].keywords == {'interaction_distance': 3.6}

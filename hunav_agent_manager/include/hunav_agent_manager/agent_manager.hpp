@@ -47,6 +47,14 @@
 namespace hunav
 {
 
+// One episode's motion models: what the harness records to tell which draw an episode ran with.
+struct MotionModelAssignment
+{
+  int episode = 0;
+  std::string strategy;
+  std::vector<std::pair<std::string, std::string>> models;  // (agent name, model), ascending id
+};
+
 struct agentBehavior
 {
   int type = 1;
@@ -304,6 +312,15 @@ public:
    * reset (no-op for the `fixed` strategy). The agents must be initialized.
    */
   void resetEpisode();
+  /**
+   * @brief the current episode index (thread-safe).
+   */
+  int episodeIndex();
+  /**
+   * @brief the current episode index, strategy and each agent's motion model by
+   * ascending id (empty models before the agents are initialized). Thread-safe.
+   */
+  MotionModelAssignment motionModelAssignment();
 
   int step_count;
   int step_count2;

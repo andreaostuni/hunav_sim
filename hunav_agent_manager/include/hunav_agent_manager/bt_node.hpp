@@ -3,6 +3,7 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <std_msgs/msg/color_rgba.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 #include <visualization_msgs/msg/marker_array.hpp>
 
@@ -199,6 +200,13 @@ protected:
   rclcpp::Publisher<hunav_msgs::msg::Agents>::SharedPtr human_state_publisher_;
   rclcpp::Publisher<hunav_msgs::msg::Agents>::SharedPtr robot_state_publisher_;
   rclcpp::Publisher<people_msgs::msg::People>::SharedPtr people_publisher_;
+
+  // Publish the current episode's motion models on ~/motion_models when the
+  // episode index changed since the last publication.
+  void publishMotionModels();
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr motion_models_publisher_;
+  int mm_seed_ = -1;
+  int last_published_episode_ = -1;
 };
 
 } // namespace hunav

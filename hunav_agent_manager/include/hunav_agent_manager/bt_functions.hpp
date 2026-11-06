@@ -102,6 +102,10 @@ public:
   void resetEpisode() {
     agent_manager_.resetEpisode();
   }
+  int episodeIndex() { return agent_manager_.episodeIndex(); }
+  MotionModelAssignment motionModelAssignment() {
+    return agent_manager_.motionModelAssignment();
+  }
 
   // BT Conditions
   BT::NodeStatus robotVisible(BT::TreeNode &self);

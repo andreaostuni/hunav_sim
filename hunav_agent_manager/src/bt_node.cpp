@@ -83,6 +83,7 @@ BTnode::BTnode() : Node("hunav_agent_manager")
 
   // Optional seed for the `random` strategy (< 0 -> non-deterministic).
   int mm_seed = this->declare_parameter<int>("motion_model_seed", -1);
+  mm_seed_ = mm_seed;
   if (mm_seed >= 0)
   {
     btfunc_.setMotionModelSeed(static_cast<unsigned int>(mm_seed));
@@ -121,6 +122,10 @@ BTnode::BTnode() : Node("hunav_agent_manager")
   {
     people_publisher_ = this->create_publisher<people_msgs::msg::People>("people", 1);
   }
+  // Each episode's motion models as JSON {episode, strategy, seed, models}, latched so a
+  // subscriber that starts late still gets the current draw.
+  motion_models_publisher_ = this->create_publisher<std_msgs::msg::String>(
+      "~/motion_models", rclcpp::QoS(1).transient_local().reliable());
 }
 
 BTnode::~BTnode()
@@ -350,6 +355,7 @@ void BTnode::computeAgentsService(const std::shared_ptr<hunav_msgs::srv::Compute
   // Update the internal agent states with the
   // received data from the simulator
   btfunc_.updateAllAgents(ro, ag);
+  publishMotionModels();  // the first update initializes the agents (episode 0)
 
   if (!initialized_)
   {
@@ -397,9 +403,43 @@ void BTnode::resetAgentsService(const std::shared_ptr<hunav_msgs::srv::ResetAgen
   // Recreate the complete agent and behavior-tree state. In particular this
   // restores non-cyclic goals consumed during the previous episode.
   btfunc_.resetAllAgents(ro, ag);
+  publishMotionModels();
   initializeBehaviorTrees(request->current_agents);
   prev_time_ = rclcpp::Time(ag->header.stamp);
   response->ok = true;
+}
+
+void BTnode::publishMotionModels()
+{
+  // Once per episode: the harness records which draw each episode ran with.
+  const int episode = btfunc_.episodeIndex();
+  if (episode == last_published_episode_)
+    return;
+  const MotionModelAssignment assignment = btfunc_.motionModelAssignment();
+  if (assignment.models.empty())
+    return;  // agents not initialized yet
+  auto quoted = [](const std::string& s) {
+    std::string out = "\"";
+    for (char c : s)
+    {
+      if (c == '"' || c == '\\')
+        out += '\\';
+      out += c;
+    }
+    return out + "\"";
+  };
+  std::string json = "{\"episode\": " + std::to_string(assignment.episode) +
+                     ", \"strategy\": " + quoted(assignment.strategy) + ", \"seed\": " + std::to_string(mm_seed_) +
+                     ", \"models\": {";
+  for (std::size_t i = 0; i < assignment.models.size(); ++i)
+  {
+    json += (i ? ", " : "") + quoted(assignment.models[i].first) + ": " + quoted(assignment.models[i].second);
+  }
+  json += "}}";
+  std_msgs::msg::String msg;
+  msg.data = json;
+  motion_models_publisher_->publish(msg);
+  last_published_episode_ = assignment.episode;
 }
 
 void BTnode::moveAgentService(const std::shared_ptr<hunav_msgs::srv::MoveAgent::Request> request,
@@ -412,6 +452,7 @@ void BTnode::moveAgentService(const std::shared_ptr<hunav_msgs::srv::MoveAgent::
   // received data from the simulator
   //RCLCPP_INFO(this->get_logger(), "Service call received agent id %i", request->agent_id);
   btfunc_.updateAllAgents(ro, ag);
+  publishMotionModels();
   // RCLCPP_INFO(this->get_logger(), "Agents updated!");
 
   if (!initialized_)

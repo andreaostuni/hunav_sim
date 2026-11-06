@@ -71,6 +71,11 @@ class HunavEvaluatorNode(Node):
             min_velocity=self.declare_parameter("min_velocity", 0.08).value,
             min_angular_velocity=self.declare_parameter("min_angular_velocity", 0.01).value,
         )
+        # Body gap (m) under which social_work_interaction counts the robot as interacting.
+        self.metric_functions["social_work_interaction"] = partial(
+            hunav_metrics.social_work_interaction,
+            interaction_distance=self.declare_parameter("interaction_distance", 3.6).value,
+        )
         # Filter of the acceleration and jerk metrics (as in social_evaluation).
         filter_params = dict(
             rate_window=self.declare_parameter("rate_window", 0.5).value,
